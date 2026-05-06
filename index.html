@@ -66,6 +66,61 @@
     .wordcount-btn.active {
       background: #4f46e5; border-color: #4f46e5; color: #fff; font-weight: 600;
     }
+
+    .chat-bubble-user {
+      align-self: flex-end; max-width: 85%;
+      background: #4f46e5; color: #fff;
+      border-radius: 14px 14px 4px 14px;
+      padding: 8px 12px; font-size: 13px; line-height: 1.5;
+      white-space: pre-wrap; word-break: break-word;
+    }
+    .chat-bubble-ai {
+      align-self: flex-start; max-width: 90%;
+      background: #0f172a; border: 1px solid #334155; color: #cbd5e1;
+      border-radius: 14px 14px 14px 4px;
+      padding: 8px 12px; font-size: 13px; line-height: 1.6;
+      white-space: pre-wrap; word-break: break-word;
+    }
+    .chat-bubble-ai code {
+      background: #1e293b; padding: 2px 5px; border-radius: 4px;
+      font-family: monospace; font-size: 12px; color: #a78bfa;
+    }
+    /* ── 이미지 스크립트 채팅 위젯 ── */
+    #scriptImgChat {
+      position: fixed; bottom: 24px; right: 24px; z-index: 100;
+      display: flex; flex-direction: column; align-items: flex-end; gap: 10px;
+    }
+    #scriptImgChatWindow {
+      width: 520px; height: 700px;
+      background: #1e293b; border: 1px solid #334155;
+      border-radius: 16px; display: flex; flex-direction: column;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+      transition: opacity 0.2s, transform 0.2s;
+      overflow: hidden;
+    }
+    #scriptImgChatWindow.hidden { opacity: 0; pointer-events: none; transform: translateY(12px); }
+    #scriptImgChatMessages {
+      flex: 1; min-height: 0; overflow-y: scroll; padding: 14px;
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    #scriptImgChatMessages::-webkit-scrollbar { width: 6px; }
+    #scriptImgChatMessages::-webkit-scrollbar-track { background: #0f172a; }
+    #scriptImgChatMessages::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+    #scriptImgChatToggle {
+      width: 52px; height: 52px; border-radius: 50%;
+      background: linear-gradient(135deg, #7c3aed, #a21caf);
+      border: none; cursor: pointer; font-size: 22px;
+      box-shadow: 0 4px 20px rgba(167,92,255,0.5);
+      transition: transform 0.2s;
+    }
+    #scriptImgChatToggle:hover { transform: scale(1.08); }
+    #scriptImgChatToggle .badge {
+      position: absolute; top: -3px; right: -3px;
+      width: 14px; height: 14px; border-radius: 50%;
+      background: #f59e0b; border: 2px solid #0f172a;
+      display: none;
+    }
+    #scriptImgChatToggle { position: relative; }
   </style>
 </head>
 <body class="text-slate-100 min-h-screen">
@@ -888,8 +943,21 @@ ${commentText}
     }
   };
 
+  let _cachedOutline = null;
+  let _cachedOutlineKeyword = '';
+
   // 2단계: 대본 목차
   function renderStage2(data, keyword) {
+    _cachedOutline        = data;
+    _cachedOutlineKeyword = keyword;
+    // 이미지 스크립트 채팅 위젯에 공유 + 뱃지 표시
+    window._sharedOutline        = data;
+    window._sharedOutlineKeyword = keyword;
+    // 이미지 스크립트 채팅 초기화
+    sibHistory = [];
+    document.getElementById('scriptImgChatMessages').innerHTML = '';
+    document.getElementById('scriptImgChatWindow').classList.add('hidden');
+    document.getElementById('scriptImgBadge').style.display = 'block';
     document.getElementById('modalHeading').textContent = `✍️ 대본 목차`;
     document.getElementById('modalVideoTitle').textContent = `주제: ${keyword}`;
 
@@ -955,7 +1023,15 @@ ${commentText}
       <div class="script-section">
         <h4 class="text-orange-300">💡 제작 팁</h4>
         <ul class="space-y-1.5">${tips}</ul>
-      </div>`;
+      </div>
+
+      <!-- 이미지 스크립트 생성 버튼 -->
+      <button id="imgScriptGenBtn" class="w-full mt-2 bg-gradient-to-r from-violet-700 to-purple-700 hover:from-violet-600 hover:to-purple-600
+               text-white text-sm font-bold py-3 rounded-xl transition flex items-center justify-center gap-2">
+        🖼️ 이 대본으로 이미지 스크립트 생성
+      </button>`;
+    // 버튼 직접 바인딩 (innerHTML 설정 후 즉시)
+    document.getElementById('imgScriptGenBtn').addEventListener('click', openScriptImgChat);
   }
 
   window.backToAnalysis = () => {
@@ -1029,6 +1105,153 @@ ${commentText}
     document.getElementById('results').innerHTML =
       `<div class="text-red-400 text-sm bg-red-900/20 border border-red-800 rounded-xl p-4">${escHtml(msg)}</div>`;
   }
+
+  // ────────────────────────────────────────────────────────
+  // 채팅 위젯 초기화 (DOM 준비 후 실행)
+  // ────────────────────────────────────────────────────────
+  // ── 공통 버블 헬퍼 ────────────────────────────────
+  let _bid = 0;
+  function chatBubble(containerId, role, text) {
+    const id  = 'b' + (++_bid);
+    const el  = document.createElement('div');
+    el.id        = id;
+    el.className = role === 'user' ? 'chat-bubble-user' : 'chat-bubble-ai';
+    el.textContent = text;
+    const box = document.getElementById(containerId);
+    box.appendChild(el);
+    box.scrollTop = box.scrollHeight;
+    return id;
+  }
+  function chatUpdateBubble(id, text) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = text;
+    el.parentElement?.scrollTo({ top: 99999, behavior: 'smooth' });
+  }
+  async function geminiChat(systemPrompt, history) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: systemPrompt }] },
+        contents: history
+      })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.error?.message || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || '응답 없음';
+  }
+
+  // ── 🖼️ 이미지 스크립트 채팅 ───────────────────────
+  const SCRIPT_IMG_PROMPT = `당신은 유튜브 영상 대본을 챕터별 이미지 스크립트로 변환하는 전문가입니다.
+대본이 입력되면 각 챕터마다 아래 형식으로 이미지 스크립트를 작성하세요:
+
+📌 챕터 N. [챕터 제목]
+🎥 컷 묘사: 화면에 보여줄 장면을 구체적으로 묘사
+🖼️ AI 프롬프트 (영어): [Midjourney/DALL-E용 영어 프롬프트]
+📹 촬영/편집 방향: B-roll, 텍스트 오버레이, 효과 등
+
+추가로 썸네일용 AI 프롬프트 1개, 오프닝/클로징 화면 제안을 포함하세요.
+실용적이고 유튜브 알고리즘에 최적화된 시각적 연출을 제안하세요.`;
+
+  let sibHistory = [];
+
+  function openScriptImgChat() {
+    if (!_cachedOutline) { alert('먼저 대본을 생성해주세요.'); return; }
+    document.getElementById('scriptImgChatWindow').classList.remove('hidden');
+    document.getElementById('scriptImgBadge').style.display = 'none';
+    document.getElementById('scriptImgChatSubtitle').textContent = `주제: ${_cachedOutlineKeyword}`;
+    if (sibHistory.length === 0) {
+      const txt = buildScriptText(_cachedOutline);
+      const msg = `다음 대본으로 챕터별 이미지 스크립트를 생성해주세요.\n\n${txt}`;
+      chatBubble('scriptImgChatMessages', 'user', msg);
+      sibHistory.push({ role: 'user', parts: [{ text: msg }] });
+      sendSib();
+    }
+  }
+
+  async function sendSib() {
+    const btn = document.getElementById('scriptImgChatSendBtn');
+    btn.disabled = true; btn.textContent = '…';
+    const tid = chatBubble('scriptImgChatMessages', 'ai', '생성 중...');
+    try {
+      const reply = await geminiChat(SCRIPT_IMG_PROMPT, sibHistory);
+      sibHistory.push({ role: 'model', parts: [{ text: reply }] });
+      chatUpdateBubble(tid, reply);
+    } catch (e) { chatUpdateBubble(tid, '오류: ' + e.message); }
+    finally { btn.disabled = false; btn.textContent = '전송'; }
+  }
+
+  function buildScriptText(o) {
+    const l = [];
+    if (o.titleCandidates?.length) l.push(`[제목 후보]\n${o.titleCandidates.join(' / ')}`);
+    if (o.thumbnailConcept)        l.push(`[썸네일 컨셉]\n${o.thumbnailConcept}`);
+    if (o.openingHook)             l.push(`[오프닝 훅]\n${o.openingHook}`);
+    (o.chapters||[]).forEach(c => l.push(`[챕터 ${c.no}. ${c.title}]\n${(c.points||[]).join(', ')}\n${c.script||''}`));
+    if (o.closing) l.push(`[클로징]\n${o.closing}`);
+    return l.join('\n\n');
+  }
+
+  document.getElementById('scriptImgChatToggle').addEventListener('click', () => {
+    const win = document.getElementById('scriptImgChatWindow');
+    if (win.classList.contains('hidden')) {
+      if (_cachedOutline && sibHistory.length === 0) openScriptImgChat();
+      else win.classList.remove('hidden');
+    } else {
+      win.classList.add('hidden');
+    }
+  });
+  document.getElementById('scriptImgChatCloseBtn').addEventListener('click', () => {
+    document.getElementById('scriptImgChatWindow').classList.add('hidden');
+  });
+  document.getElementById('scriptImgChatSendBtn').addEventListener('click', () => {
+    const input = document.getElementById('scriptImgChatInput');
+    const text  = input.value.trim(); if (!text) return;
+    input.value = '';
+    chatBubble('scriptImgChatMessages', 'user', text);
+    sibHistory.push({ role: 'user', parts: [{ text }] });
+    sendSib();
+  });
+  document.getElementById('scriptImgChatInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); document.getElementById('scriptImgChatSendBtn').click(); }
+  });
+
+
 </script>
+
+<!-- ── 이미지 스크립트 채팅 위젯 ── -->
+<div id="scriptImgChat">
+  <div id="scriptImgChatWindow" class="hidden">
+    <div class="flex items-center justify-between px-4 py-3 border-b border-slate-700 flex-shrink-0">
+      <div>
+        <p class="text-sm font-bold text-violet-300">🖼️ 이미지 스크립트 생성 AI</p>
+        <p id="scriptImgChatSubtitle" class="text-[11px] text-slate-500">대본 챕터별 이미지 스크립트 자동 생성</p>
+      </div>
+      <button id="scriptImgChatCloseBtn" class="text-slate-400 hover:text-white text-lg leading-none">✕</button>
+    </div>
+    <div id="scriptImgChatMessages"></div>
+    <div class="flex gap-2 p-3 border-t border-slate-700 flex-shrink-0">
+      <textarea id="scriptImgChatInput" rows="2"
+        placeholder="추가 요청이나 수정 사항을 입력하세요... (Enter 전송)"
+        class="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 resize-none focus:outline-none focus:border-violet-500"
+        id="scriptImgChatInput"></textarea>
+      <button id="scriptImgChatSendBtn"
+        class="bg-violet-600 hover:bg-violet-500 text-white text-xs font-bold px-3 rounded-lg transition flex-shrink-0">
+        전송
+      </button>
+    </div>
+  </div>
+  <button id="scriptImgChatToggle" title="이미지 스크립트 생성 AI">
+    🖼️
+    <span class="badge" id="scriptImgBadge"></span>
+  </button>
+</div>
+
+<!-- ── 이미지 프롬프트 채팅 위젯 ── -->
+
 </body>
 </html>
