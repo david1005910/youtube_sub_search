@@ -307,8 +307,27 @@
     icon.textContent = hidden ? '▼ 펼치기' : '▲ 접기';
   };
 
-  // ─── 키 저장 ────────────────────────────────────
-  window.saveKeys = () => {
+  // ─── 초기 키 로드 (.env → 서버 → 입력창) ────────
+  (async () => {
+    try {
+      const res = await fetch('/api/config');
+      if (!res.ok) return;
+      const cfg = await res.json();
+      if (cfg.YOUTUBE_API_KEY) document.getElementById('ytKeyInput').value = cfg.YOUTUBE_API_KEY;
+      if (cfg.GEMINI_API_KEY)  document.getElementById('geminiKeyInput').value = cfg.GEMINI_API_KEY;
+      if (cfg.GEMINI_MODEL)    document.getElementById('geminiModelInput').value = cfg.GEMINI_MODEL;
+      YOUTUBE_API_KEY = cfg.YOUTUBE_API_KEY || '';
+      GEMINI_API_KEY  = cfg.GEMINI_API_KEY  || '';
+      GEMINI_MODEL    = cfg.GEMINI_MODEL    || 'gemini-2.5-flash';
+      if (YOUTUBE_API_KEY && GEMINI_API_KEY) {
+        document.getElementById('apiPanelBody').classList.add('hidden');
+        document.getElementById('apiToggleIcon').textContent = '▼ 펼치기';
+      }
+    } catch (_) { /* 직접 파일로 열 때는 무시 */ }
+  })();
+
+  // ─── 키 저장 (.env에 기록) ───────────────────────
+  window.saveKeys = async () => {
     YOUTUBE_API_KEY = document.getElementById('ytKeyInput').value.trim();
     GEMINI_API_KEY  = document.getElementById('geminiKeyInput').value.trim();
     GEMINI_MODEL    = document.getElementById('geminiModelInput').value.trim() || 'gemini-2.5-flash';
@@ -316,6 +335,13 @@
       alert('YouTube API 키와 Gemini API 키를 모두 입력해주세요.');
       return;
     }
+    try {
+      await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ YOUTUBE_API_KEY, GEMINI_API_KEY, GEMINI_MODEL })
+      });
+    } catch (_) { /* 서버 없을 때 무시 */ }
     const el = document.getElementById('keySaved');
     el.classList.remove('hidden');
     setTimeout(() => el.classList.add('hidden'), 2500);
@@ -489,17 +515,27 @@
               ${escHtml(v.title)}
             </a>
             <p class="text-xs text-slate-400 mb-2.5">${escHtml(v.channel)}</p>
-            <div class="grid grid-cols-3 gap-2 text-xs text-slate-400 mb-2">
-              <div>👁 <span class="text-slate-200">${fmt(v.views)}</span></div>
-              <div>👥 <span class="text-slate-200">${fmt(v.subs)}</span></div>
-              <div>📈 <span class="font-bold ${ratioColor}">${v.ratio.toFixed(0)}%</span></div>
+            <div class="grid grid-cols-3 gap-2 text-xs mb-2">
+              <div class="flex flex-col gap-0.5">
+                <span class="text-[10px] text-slate-500">👁 조회수</span>
+                <span class="text-slate-200 font-medium">${fmt(v.views)}</span>
+              </div>
+              <div class="flex flex-col gap-0.5">
+                <span class="text-[10px] text-slate-500">👥 구독자수</span>
+                <span class="text-slate-200 font-medium">${fmt(v.subs)}</span>
+              </div>
+              <div class="flex flex-col gap-0.5">
+                <span class="text-[10px] text-slate-500">📈 바이럴 비율</span>
+                <span class="font-bold ${ratioColor}">${v.ratio.toFixed(0)}%</span>
+              </div>
             </div>
             <div class="mb-3 bg-slate-700/40 rounded-full overflow-hidden" style="height:4px">
               <div class="ratio-bar h-full" style="width:${barW}%"></div>
             </div>
-            <button onclick="startCommentAnalysis('${v.id}', \`${escJs(v.title)}\`)"
+            <button class="comment-analysis-btn bg-slate-700 hover:bg-indigo-700 text-xs text-slate-200 px-3 py-1.5 rounded-lg transition flex items-center gap-1.5"
               id="btn-${v.id}"
-              class="bg-slate-700 hover:bg-indigo-700 text-xs text-slate-200 px-3 py-1.5 rounded-lg transition flex items-center gap-1.5">
+              data-video-id="${v.id}"
+              data-video-title="${escHtml(v.title)}">
               <span>💬 댓글 수집 및 AI 분석</span>
               <span id="spin-${v.id}" class="spinner hidden" style="width:13px;height:13px;border-width:2px"></span>
             </button>
@@ -511,7 +547,14 @@
 
   // ─── 댓글 수집 & 분석 ───────────────────────────
   window.startCommentAnalysis = async (videoId, title) => {
-    if (!GEMINI_API_KEY) { alert('먼저 Gemini API 키를 저장해주세요.'); return; }
+    if (!GEMINI_API_KEY) {
+      alert('Gemini API 키가 설정되지 않았습니다.\n키 설정 패널에서 저장해주세요.');
+      return;
+    }
+    if (!YOUTUBE_API_KEY) {
+      alert('YouTube API 키가 설정되지 않았습니다.\n키 설정 패널에서 저장해주세요.');
+      return;
+    }
 
     const btn  = document.getElementById(`btn-${videoId}`);
     const spin = document.getElementById(`spin-${videoId}`);
@@ -521,7 +564,9 @@
     try {
       const comments = await fetchComments(videoId);
       if (!comments.length) {
-        alert('댓글을 가져올 수 없습니다 (비활성화 영상일 수 있습니다).');
+        openModalLoading(title, '');
+        document.getElementById('modalBody').innerHTML =
+          `<p class="text-yellow-400 p-4">이 영상은 댓글이 비활성화되어 있거나 댓글이 없습니다.</p>`;
         return;
       }
       openModalLoading(title, `댓글 ${comments.length}개를 AI가 분석하고 있습니다...`);
@@ -530,8 +575,13 @@
       _cachedVideoTitle = title;
       renderStage1(analysis, title);
     } catch (e) {
-      closeModal();
-      alert('분석 오류: ' + e.message);
+      console.error('댓글 분석 오류:', e);
+      openModalLoading(title, '');
+      document.getElementById('modalBody').innerHTML =
+        `<div class="p-4 space-y-2">
+           <p class="text-red-400 font-semibold">오류 발생</p>
+           <p class="text-slate-300 text-xs">${escHtml(e.message)}</p>
+         </div>`;
     } finally {
       btn.disabled = false;
       spin.classList.add('hidden');
@@ -539,22 +589,34 @@
   };
 
   async function fetchComments(videoId) {
-    try {
-      const url = `${YT_BASE}/commentThreads?part=snippet&videoId=${videoId}&maxResults=50&order=relevance&key=${YOUTUBE_API_KEY}`;
-      const res = await apiFetch(url);
-      return res.items.map(i => {
-        const s = i.snippet.topLevelComment.snippet;
-        return { text: s.textDisplay, likes: s.likeCount || 0 };
-      });
-    } catch { return []; }
+    const url = `${YT_BASE}/commentThreads?part=snippet&videoId=${videoId}&maxResults=50&order=relevance&key=${YOUTUBE_API_KEY}`;
+    const res = await apiFetch(url);
+    return (res.items || []).map(i => {
+      const s = i.snippet.topLevelComment.snippet;
+      return { text: s.textDisplay, likes: s.likeCount || 0 };
+    });
+  }
+
+  // ─── Gemini REST API 공통 호출 ──────────────────
+  async function callGemini(prompt) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.error?.message || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) throw new Error('AI 응답이 비어 있습니다.');
+    return text;
   }
 
   // ─── Gemini: 댓글 분석 (JSON) ───────────────────
   async function callGeminiAnalysis(title, comments) {
-    const { GoogleGenerativeAI } = await import('https://esm.run/@google/generative-ai');
-    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
-
     const commentText = comments
       .map((c, i) => `${i + 1}. [좋아요 ${c.likes}개] ${c.text}`)
       .join('\n');
@@ -607,18 +669,14 @@ ${commentText}
   ]
 }`.trim();
 
-    const result = await model.generateContent(prompt);
-    const text   = result.response.text();
-    const match  = text.match(/\{[\s\S]*\}/);
+    const raw   = await callGemini(prompt);
+    const match = raw.match(/\{[\s\S]*\}/);
     if (!match) throw new Error('AI 응답 파싱 실패. 모델명을 확인해주세요.');
     return JSON.parse(match[0]);
   }
 
   // ─── Gemini: 대본 목차 (JSON) ───────────────────
   async function callGeminiOutline(keyword, videoTitle, wordCount) {
-    const { GoogleGenerativeAI } = await import('https://esm.run/@google/generative-ai');
-    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
 
     const lengthGuide = {
       500:  '각 섹션은 1~3문장의 핵심만 작성 (총 500자 내외)',
@@ -650,9 +708,8 @@ ${commentText}
   "productionTips": ["제작 팁1","제작 팁2","제작 팁3"]
 }`.trim();
 
-    const result = await model.generateContent(prompt);
-    const text   = result.response.text();
-    const match  = text.match(/\{[\s\S]*\}/);
+    const raw   = await callGemini(prompt);
+    const match = raw.match(/\{[\s\S]*\}/);
     if (!match) throw new Error('대본 목차 파싱 실패. 다시 시도해주세요.');
     return JSON.parse(match[0]);
   }
@@ -904,6 +961,15 @@ ${commentText}
   window.backToAnalysis = () => {
     if (_cachedAnalysis) renderStage1(_cachedAnalysis, _cachedVideoTitle);
   };
+
+  // ─── 댓글 분석 버튼 이벤트 위임 ────────────────────
+  document.getElementById('results').addEventListener('click', e => {
+    const btn = e.target.closest('.comment-analysis-btn');
+    if (!btn) return;
+    const videoId = btn.dataset.videoId;
+    const title   = btn.dataset.videoTitle;
+    window.startCommentAnalysis(videoId, title);
+  });
 
   // ─── 모달 제어 ──────────────────────────────────
   window.closeModal = () => {
