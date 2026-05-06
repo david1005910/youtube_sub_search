@@ -86,22 +86,26 @@
       font-family: monospace; font-size: 12px; color: #a78bfa;
     }
     /* ── YouTube Creator AI 채팅 위젯 ── */
-    #ytChat {
-      position: fixed; bottom: 24px; right: 90px; z-index: 100;
-      display: flex; flex-direction: column; align-items: flex-end; gap: 10px;
+    #ytChatToggle {
+      position: fixed; bottom: 24px; right: 90px; z-index: 1000;
+      width: 52px; height: 52px; border-radius: 50%;
+      background: linear-gradient(135deg, #059669, #0d9488);
+      border: none; cursor: pointer; font-size: 22px;
+      box-shadow: 0 4px 20px rgba(16,185,129,0.5);
+      transition: transform 0.2s;
     }
+    #ytChatToggle:hover { transform: scale(1.08); }
     #ytChatWindow {
-      width: 520px; height: 700px;
+      position: fixed; right: 90px; z-index: 999;
+      bottom: calc(24px + 52px + 10px);
+      width: 520px;
+      height: min(700px, calc(100vh - 100px));
       background: #1e293b; border: 1px solid #334155;
       border-radius: 16px; flex-direction: column;
       box-shadow: 0 20px 60px rgba(0,0,0,0.6);
-      transition: opacity 0.2s, transform 0.2s;
-      overflow: hidden;
-      display: none; opacity: 0;
+      overflow: hidden; display: none;
     }
-    #ytChatWindow.open {
-      display: flex; opacity: 1; transform: none;
-    }
+    #ytChatWindow.open { display: flex; }
     #ytChatMessages {
       flex: 1; min-height: 0; overflow-y: scroll; padding: 14px;
       display: flex; flex-direction: column; gap: 10px;
@@ -112,14 +116,6 @@
     #ytSkillBar { scrollbar-width: thin; }
     #ytSkillBar::-webkit-scrollbar { height: 3px; }
     #ytSkillBar::-webkit-scrollbar-thumb { background: #475569; border-radius: 2px; }
-    #ytChatToggle {
-      width: 52px; height: 52px; border-radius: 50%;
-      background: linear-gradient(135deg, #059669, #0d9488);
-      border: none; cursor: pointer; font-size: 22px;
-      box-shadow: 0 4px 20px rgba(16,185,129,0.5);
-      transition: transform 0.2s; position: relative;
-    }
-    #ytChatToggle:hover { transform: scale(1.08); }
     #ytChatToggle .badge {
       position: absolute; top: -3px; right: -3px;
       width: 14px; height: 14px; border-radius: 50%;
@@ -1381,48 +1377,46 @@ ${commentText}
 </script>
 
 <!-- ── YouTube Creator AI 채팅 위젯 ── -->
-<div id="ytChat">
-  <div id="ytChatWindow">
-    <div class="flex items-center justify-between px-4 py-3 border-b border-slate-700 flex-shrink-0">
-      <div>
-        <p class="text-sm font-bold text-emerald-300">🎬 YouTube Creator AI</p>
-        <p id="ytChatSkillName" class="text-[11px] text-slate-500">스킬을 선택하거나 자유롭게 질문하세요</p>
-      </div>
-      <button id="ytChatCloseBtn" class="text-slate-400 hover:text-white text-lg leading-none">✕</button>
+<div id="ytChatWindow">
+  <div class="flex items-center justify-between px-4 py-3 border-b border-slate-700 flex-shrink-0">
+    <div>
+      <p class="text-sm font-bold text-emerald-300">🎬 YouTube Creator AI</p>
+      <p id="ytChatSkillName" class="text-[11px] text-slate-500">스킬을 선택하거나 자유롭게 질문하세요</p>
     </div>
-    <div id="ytSkillBar" class="flex gap-1.5 px-3 py-2 border-b border-slate-700 overflow-x-auto flex-shrink-0">
-      <button class="yt-skill-pill active" data-skill="">💬 일반</button>
-      <button class="yt-skill-pill" data-skill="ideate">💡 아이디어</button>
-      <button class="yt-skill-pill" data-skill="script">📝 대본</button>
-      <button class="yt-skill-pill" data-skill="hook">🎣 훅</button>
-      <button class="yt-skill-pill" data-skill="seo">🔍 SEO</button>
-      <button class="yt-skill-pill" data-skill="thumbnail">🖼 썸네일</button>
-      <button class="yt-skill-pill" data-skill="strategy">🗺 전략</button>
-      <button class="yt-skill-pill" data-skill="calendar">📅 캘린더</button>
-      <button class="yt-skill-pill" data-skill="audit">🏥 채널감사</button>
-      <button class="yt-skill-pill" data-skill="shorts">📱 쇼츠</button>
-      <button class="yt-skill-pill" data-skill="analyze">📊 분석</button>
-      <button class="yt-skill-pill" data-skill="monetize">💰 수익화</button>
-      <button class="yt-skill-pill" data-skill="competitor">🕵 경쟁사</button>
-      <button class="yt-skill-pill" data-skill="repurpose">♻ 재가공</button>
-      <button class="yt-skill-pill" data-skill="metadata">🏷 메타데이터</button>
-    </div>
-    <div id="ytChatMessages"></div>
-    <div class="flex gap-2 p-3 border-t border-slate-700 flex-shrink-0">
-      <textarea id="ytChatInput" rows="2"
-        placeholder="YouTube 채널에 대해 무엇이든 질문하세요... (Enter 전송)"
-        class="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 resize-none focus:outline-none focus:border-emerald-500"></textarea>
-      <button id="ytChatSendBtn"
-        class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3 rounded-lg transition flex-shrink-0">
-        전송
-      </button>
-    </div>
+    <button id="ytChatCloseBtn" class="text-slate-400 hover:text-white text-lg leading-none">✕</button>
   </div>
-  <button id="ytChatToggle" title="YouTube Creator AI">
-    🎬
-    <span class="badge" id="ytChatBadge"></span>
-  </button>
+  <div id="ytSkillBar" class="flex gap-1.5 px-3 py-2 border-b border-slate-700 overflow-x-auto flex-shrink-0">
+    <button class="yt-skill-pill active" data-skill="">💬 일반</button>
+    <button class="yt-skill-pill" data-skill="ideate">💡 아이디어</button>
+    <button class="yt-skill-pill" data-skill="script">📝 대본</button>
+    <button class="yt-skill-pill" data-skill="hook">🎣 훅</button>
+    <button class="yt-skill-pill" data-skill="seo">🔍 SEO</button>
+    <button class="yt-skill-pill" data-skill="thumbnail">🖼 썸네일</button>
+    <button class="yt-skill-pill" data-skill="strategy">🗺 전략</button>
+    <button class="yt-skill-pill" data-skill="calendar">📅 캘린더</button>
+    <button class="yt-skill-pill" data-skill="audit">🏥 채널감사</button>
+    <button class="yt-skill-pill" data-skill="shorts">📱 쇼츠</button>
+    <button class="yt-skill-pill" data-skill="analyze">📊 분석</button>
+    <button class="yt-skill-pill" data-skill="monetize">💰 수익화</button>
+    <button class="yt-skill-pill" data-skill="competitor">🕵 경쟁사</button>
+    <button class="yt-skill-pill" data-skill="repurpose">♻ 재가공</button>
+    <button class="yt-skill-pill" data-skill="metadata">🏷 메타데이터</button>
+  </div>
+  <div id="ytChatMessages"></div>
+  <div class="flex gap-2 p-3 border-t border-slate-700 flex-shrink-0">
+    <textarea id="ytChatInput" rows="2"
+      placeholder="YouTube 채널에 대해 무엇이든 질문하세요... (Enter 전송)"
+      class="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 resize-none focus:outline-none focus:border-emerald-500"></textarea>
+    <button id="ytChatSendBtn"
+      class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3 rounded-lg transition flex-shrink-0">
+      전송
+    </button>
+  </div>
 </div>
+<button id="ytChatToggle" title="YouTube Creator AI">
+  🎬
+  <span class="badge" id="ytChatBadge"></span>
+</button>
 
 <!-- ── 이미지 스크립트 채팅 위젯 ── -->
 <div id="scriptImgChat">
