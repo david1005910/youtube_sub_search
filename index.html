@@ -85,6 +85,52 @@
       background: #1e293b; padding: 2px 5px; border-radius: 4px;
       font-family: monospace; font-size: 12px; color: #a78bfa;
     }
+    /* ── YouTube Creator AI 채팅 위젯 ── */
+    #ytChat {
+      position: fixed; bottom: 24px; right: 90px; z-index: 100;
+      display: flex; flex-direction: column; align-items: flex-end; gap: 10px;
+    }
+    #ytChatWindow {
+      width: 520px; height: 700px;
+      background: #1e293b; border: 1px solid #334155;
+      border-radius: 16px; display: flex; flex-direction: column;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+      transition: opacity 0.2s, transform 0.2s;
+      overflow: hidden;
+    }
+    #ytChatWindow.hidden { opacity: 0; pointer-events: none; transform: translateY(12px); }
+    #ytChatMessages {
+      flex: 1; min-height: 0; overflow-y: scroll; padding: 14px;
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    #ytChatMessages::-webkit-scrollbar { width: 6px; }
+    #ytChatMessages::-webkit-scrollbar-track { background: #0f172a; }
+    #ytChatMessages::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+    #ytSkillBar { scrollbar-width: thin; }
+    #ytSkillBar::-webkit-scrollbar { height: 3px; }
+    #ytSkillBar::-webkit-scrollbar-thumb { background: #475569; border-radius: 2px; }
+    #ytChatToggle {
+      width: 52px; height: 52px; border-radius: 50%;
+      background: linear-gradient(135deg, #059669, #0d9488);
+      border: none; cursor: pointer; font-size: 22px;
+      box-shadow: 0 4px 20px rgba(16,185,129,0.5);
+      transition: transform 0.2s; position: relative;
+    }
+    #ytChatToggle:hover { transform: scale(1.08); }
+    #ytChatToggle .badge {
+      position: absolute; top: -3px; right: -3px;
+      width: 14px; height: 14px; border-radius: 50%;
+      background: #f59e0b; border: 2px solid #0f172a; display: none;
+    }
+    .yt-skill-pill {
+      white-space: nowrap; font-size: 11px; font-weight: 600;
+      padding: 3px 9px; border-radius: 20px; border: 1px solid #334155;
+      background: #0f172a; color: #94a3b8; cursor: pointer;
+      transition: all 0.15s; flex-shrink: 0;
+    }
+    .yt-skill-pill:hover { border-color: #10b981; color: #10b981; }
+    .yt-skill-pill.active { background: #059669; border-color: #059669; color: #fff; }
+
     /* ── 이미지 스크립트 채팅 위젯 ── */
     #scriptImgChat {
       position: fixed; bottom: 24px; right: 24px; z-index: 100;
@@ -1220,8 +1266,147 @@ ${commentText}
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); document.getElementById('scriptImgChatSendBtn').click(); }
   });
 
+  // ── 🎬 YouTube Creator AI 채팅 ──────────────────────
+  let ytHistory = [];
+  let ytSystemPrompt = '';
+
+  const YT_GENERAL_PROMPT = `당신은 전문적인 YouTube 채널 성장 전문가이자 콘텐츠 크리에이터 AI 어시스턴트입니다.
+채널 전략, SEO, 대본 작성, 썸네일 기획, 쇼츠 최적화, 수익화, 경쟁사 분석 등 유튜브 관련 모든 주제를 깊이 있게 도와드립니다.
+구체적이고 실행 가능한 조언을 제공하며, 데이터와 알고리즘 원리에 기반한 전략을 제시합니다.
+한국어로 답변하세요. 마크다운 형식을 활용하여 명확하게 구조화된 답변을 작성하세요.`;
+
+  const YT_SKILL_GREETINGS = {
+    '':          '안녕하세요! YouTube 채널 성장을 도와드리는 AI입니다. 위에서 스킬을 선택하거나 자유롭게 질문하세요! 🎬',
+    ideate:      '영상 아이디어 발굴 모드입니다. 채널 니치와 구독자 규모를 알려주시면 검색 수요 기반의 아이디어 10개를 생성합니다! 💡',
+    script:      '대본 작성 모드입니다. 영상 주제, 목표 길이(분), 채널 유형, 핵심 포인트를 알려주세요! 📝',
+    hook:        '훅 작성 모드입니다. 영상 주제와 채널 니치를 알려주시면 5가지 심리 메커니즘의 30초 훅 변형을 작성합니다! 🎣',
+    seo:         'SEO 최적화 모드입니다. 타겟 키워드, 채널 니치, 영상 내용 요약을 알려주세요! 🔍',
+    thumbnail:   '썸네일 기획 모드입니다. 영상 주제와 채널 유형을 알려주시면 CTR 최적화된 썸네일 brief를 만듭니다! 🖼',
+    strategy:    '채널 전략 모드입니다. 채널 현황(구독자·영상 수·월간 조회수)과 목표를 알려주세요! 🗺',
+    calendar:    '콘텐츠 캘린더 모드입니다. 채널 니치와 업로드 빈도 목표를 알려주시면 월간 계획을 세워드립니다! 📅',
+    audit:       '채널 감사 모드입니다. 채널 URL/핸들, 니치, 구독자 규모, 주요 목표를 알려주세요! 🏥',
+    shorts:      '쇼츠 최적화 모드입니다. 채널 니치와 현재 쇼츠 활용 현황을 알려주세요! 📱',
+    analyze:     '채널 분석 모드입니다. 분석하고 싶은 지표나 문제 상황을 알려주세요! 📊',
+    monetize:    '수익화 전략 모드입니다. 채널 규모, 니치, 현재 수익원을 알려주시면 7가지 수익 스트림 전략을 안내합니다! 💰',
+    competitor:  '경쟁사 분석 모드입니다. 분석할 채널 URL이나 @핸들을 알려주세요! 🕵',
+    repurpose:   '콘텐츠 재가공 모드입니다. 재가공할 영상 주제와 목표 플랫폼을 알려주세요! ♻',
+    metadata:    '메타데이터 최적화 모드입니다. 영상 주제, 채널 니치, 내용 요약을 알려주세요! 🏷',
+  };
+
+  async function loadYtSkill(skillName) {
+    if (!skillName) { ytSystemPrompt = YT_GENERAL_PROMPT; return YT_SKILL_GREETINGS['']; }
+    try {
+      const res = await fetch(`/api/skill/${skillName}`);
+      if (!res.ok) throw new Error('not found');
+      const data = await res.json();
+      ytSystemPrompt = data.content +
+        '\n\n한국어로 답변하세요. 마크다운 형식을 활용하여 명확하게 구조화된 답변을 작성하세요.';
+      return YT_SKILL_GREETINGS[skillName] || `${skillName} 스킬이 활성화되었습니다!`;
+    } catch(e) {
+      ytSystemPrompt = YT_GENERAL_PROMPT;
+      return '스킬 로드 실패, 일반 모드로 시작합니다.';
+    }
+  }
+
+  async function sendYtChat() {
+    const input = document.getElementById('ytChatInput');
+    const text = input.value.trim(); if (!text) return;
+    input.value = '';
+    chatBubble('ytChatMessages', 'user', text);
+    ytHistory.push({ role: 'user', parts: [{ text }] });
+    const btn = document.getElementById('ytChatSendBtn');
+    btn.disabled = true; btn.textContent = '…';
+    const tid = chatBubble('ytChatMessages', 'ai', '분석 중...');
+    try {
+      const reply = await geminiChat(ytSystemPrompt || YT_GENERAL_PROMPT, ytHistory);
+      ytHistory.push({ role: 'model', parts: [{ text: reply }] });
+      chatUpdateBubble(tid, reply);
+    } catch(e) { chatUpdateBubble(tid, '오류: ' + e.message); }
+    finally { btn.disabled = false; btn.textContent = '전송'; }
+  }
+
+  document.getElementById('ytChatToggle').addEventListener('click', () => {
+    const win = document.getElementById('ytChatWindow');
+    win.classList.toggle('hidden');
+    if (!win.classList.contains('hidden') && ytHistory.length === 0) {
+      if (!ytSystemPrompt) ytSystemPrompt = YT_GENERAL_PROMPT;
+      chatBubble('ytChatMessages', 'ai', YT_SKILL_GREETINGS['']);
+    }
+  });
+
+  document.getElementById('ytChatCloseBtn').addEventListener('click', () => {
+    document.getElementById('ytChatWindow').classList.add('hidden');
+  });
+
+  document.getElementById('ytSkillBar').addEventListener('click', async e => {
+    const pill = e.target.closest('.yt-skill-pill');
+    if (!pill) return;
+    document.querySelectorAll('.yt-skill-pill').forEach(p => p.classList.remove('active'));
+    pill.classList.add('active');
+    const skillName = pill.dataset.skill;
+    document.getElementById('ytChatSkillName').textContent =
+      skillName ? pill.textContent.trim() + ' 스킬 활성화됨' : '일반 모드';
+    ytHistory = [];
+    document.getElementById('ytChatMessages').innerHTML = '';
+    const tid = chatBubble('ytChatMessages', 'ai', skillName ? '스킬 로딩 중...' : YT_SKILL_GREETINGS['']);
+    if (skillName) {
+      const greeting = await loadYtSkill(skillName);
+      chatUpdateBubble(tid, greeting);
+    } else {
+      loadYtSkill('');
+    }
+  });
+
+  document.getElementById('ytChatSendBtn').addEventListener('click', sendYtChat);
+  document.getElementById('ytChatInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendYtChat(); }
+  });
 
 </script>
+
+<!-- ── YouTube Creator AI 채팅 위젯 ── -->
+<div id="ytChat">
+  <div id="ytChatWindow" class="hidden">
+    <div class="flex items-center justify-between px-4 py-3 border-b border-slate-700 flex-shrink-0">
+      <div>
+        <p class="text-sm font-bold text-emerald-300">🎬 YouTube Creator AI</p>
+        <p id="ytChatSkillName" class="text-[11px] text-slate-500">스킬을 선택하거나 자유롭게 질문하세요</p>
+      </div>
+      <button id="ytChatCloseBtn" class="text-slate-400 hover:text-white text-lg leading-none">✕</button>
+    </div>
+    <div id="ytSkillBar" class="flex gap-1.5 px-3 py-2 border-b border-slate-700 overflow-x-auto flex-shrink-0">
+      <button class="yt-skill-pill active" data-skill="">💬 일반</button>
+      <button class="yt-skill-pill" data-skill="ideate">💡 아이디어</button>
+      <button class="yt-skill-pill" data-skill="script">📝 대본</button>
+      <button class="yt-skill-pill" data-skill="hook">🎣 훅</button>
+      <button class="yt-skill-pill" data-skill="seo">🔍 SEO</button>
+      <button class="yt-skill-pill" data-skill="thumbnail">🖼 썸네일</button>
+      <button class="yt-skill-pill" data-skill="strategy">🗺 전략</button>
+      <button class="yt-skill-pill" data-skill="calendar">📅 캘린더</button>
+      <button class="yt-skill-pill" data-skill="audit">🏥 채널감사</button>
+      <button class="yt-skill-pill" data-skill="shorts">📱 쇼츠</button>
+      <button class="yt-skill-pill" data-skill="analyze">📊 분석</button>
+      <button class="yt-skill-pill" data-skill="monetize">💰 수익화</button>
+      <button class="yt-skill-pill" data-skill="competitor">🕵 경쟁사</button>
+      <button class="yt-skill-pill" data-skill="repurpose">♻ 재가공</button>
+      <button class="yt-skill-pill" data-skill="metadata">🏷 메타데이터</button>
+    </div>
+    <div id="ytChatMessages"></div>
+    <div class="flex gap-2 p-3 border-t border-slate-700 flex-shrink-0">
+      <textarea id="ytChatInput" rows="2"
+        placeholder="YouTube 채널에 대해 무엇이든 질문하세요... (Enter 전송)"
+        class="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 resize-none focus:outline-none focus:border-emerald-500"></textarea>
+      <button id="ytChatSendBtn"
+        class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3 rounded-lg transition flex-shrink-0">
+        전송
+      </button>
+    </div>
+  </div>
+  <button id="ytChatToggle" title="YouTube Creator AI">
+    🎬
+    <span class="badge" id="ytChatBadge"></span>
+  </button>
+</div>
 
 <!-- ── 이미지 스크립트 채팅 위젯 ── -->
 <div id="scriptImgChat">
