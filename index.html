@@ -166,6 +166,52 @@
       display: none;
     }
     #scriptImgChatToggle { position: relative; }
+
+    /* ── YouTube Skills (TranscriptAPI) 채팅 위젯 ── */
+    #ytApiChatToggle {
+      position: fixed; bottom: 24px; right: 156px; z-index: 1000;
+      width: 52px; height: 52px; border-radius: 50%;
+      background: linear-gradient(135deg, #0284c7, #0891b2);
+      border: none; cursor: pointer; font-size: 22px;
+      box-shadow: 0 4px 20px rgba(2,132,199,0.5);
+      transition: transform 0.2s;
+    }
+    #ytApiChatToggle:hover { transform: scale(1.08); }
+    #ytApiChatWindow {
+      position: fixed; right: 156px; z-index: 999;
+      bottom: calc(24px + 52px + 10px);
+      width: 540px;
+      height: min(720px, calc(100vh - 100px));
+      background: #1e293b; border: 1px solid #334155;
+      border-radius: 16px; flex-direction: column;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+      overflow: hidden; display: none;
+    }
+    #ytApiChatWindow.open { display: flex; }
+    #ytApiChatMessages {
+      flex: 1; min-height: 0; overflow-y: scroll; padding: 14px;
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    #ytApiChatMessages::-webkit-scrollbar { width: 6px; }
+    #ytApiChatMessages::-webkit-scrollbar-track { background: #0f172a; }
+    #ytApiChatMessages::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+    #ytApiSkillBar { scrollbar-width: thin; }
+    #ytApiSkillBar::-webkit-scrollbar { height: 3px; }
+    #ytApiSkillBar::-webkit-scrollbar-thumb { background: #475569; border-radius: 2px; }
+    .yt-api-skill-pill {
+      white-space: nowrap; font-size: 11px; font-weight: 600;
+      padding: 3px 9px; border-radius: 20px; border: 1px solid #334155;
+      background: #0f172a; color: #94a3b8; cursor: pointer;
+      transition: all 0.15s; flex-shrink: 0;
+    }
+    .yt-api-skill-pill:hover { border-color: #0ea5e9; color: #0ea5e9; }
+    .yt-api-skill-pill.active { background: #0284c7; border-color: #0284c7; color: #fff; }
+    .api-result-block {
+      background: #0f172a; border: 1px solid #1e40af;
+      border-radius: 8px; padding: 10px; font-size: 12px;
+      font-family: monospace; white-space: pre-wrap; word-break: break-all;
+      color: #93c5fd; max-height: 300px; overflow-y: auto;
+    }
   </style>
 </head>
 <body class="text-slate-100 min-h-screen">
@@ -286,6 +332,21 @@
           class="w-full md:w-72 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" />
         <p class="text-xs text-slate-500 mt-1">404 오류 시 AI Studio에서 사용 가능한 모델명 확인 후 변경</p>
       </div>
+      <!-- TranscriptAPI 키 -->
+      <div class="border-t border-slate-600/50 pt-4 mt-1 mb-4">
+        <div class="flex items-center gap-2 mb-2">
+          <span class="text-xs font-semibold text-cyan-400">▶️ YouTube Skills (TranscriptAPI.com)</span>
+          <a href="https://transcriptapi.com" target="_blank" class="text-[11px] text-slate-500 underline">무료 계정 100 크레딧</a>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">TranscriptAPI 키</label>
+            <input id="transcriptKeyInput" type="password" placeholder="sk_..."
+              class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-cyan-500" />
+            <p class="text-xs text-slate-500 mt-1">transcriptapi.com 가입 후 발급 (신용카드 불필요)</p>
+          </div>
+        </div>
+      </div>
       <button onclick="saveKeys()"
         class="bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-5 py-2 rounded-lg transition">
         키 저장
@@ -382,9 +443,10 @@
 
 <script type="module">
   // ─── 상태 ───────────────────────────────────────
-  let YOUTUBE_API_KEY = '';
-  let GEMINI_API_KEY  = '';
-  let GEMINI_MODEL    = 'gemini-2.5-flash';
+  let YOUTUBE_API_KEY    = '';
+  let GEMINI_API_KEY     = '';
+  let GEMINI_MODEL       = 'gemini-2.5-flash';
+  let TRANSCRIPT_API_KEY = '';
   let _cachedAnalysis = null;   // 분석 결과 캐시
   let _cachedVideoTitle = '';
 
@@ -413,12 +475,14 @@
       const res = await fetch('/api/config');
       if (!res.ok) return;
       const cfg = await res.json();
-      if (cfg.YOUTUBE_API_KEY) document.getElementById('ytKeyInput').value = cfg.YOUTUBE_API_KEY;
-      if (cfg.GEMINI_API_KEY)  document.getElementById('geminiKeyInput').value = cfg.GEMINI_API_KEY;
-      if (cfg.GEMINI_MODEL)    document.getElementById('geminiModelInput').value = cfg.GEMINI_MODEL;
-      YOUTUBE_API_KEY = cfg.YOUTUBE_API_KEY || '';
-      GEMINI_API_KEY  = cfg.GEMINI_API_KEY  || '';
-      GEMINI_MODEL    = cfg.GEMINI_MODEL    || 'gemini-2.5-flash';
+      if (cfg.YOUTUBE_API_KEY)    document.getElementById('ytKeyInput').value = cfg.YOUTUBE_API_KEY;
+      if (cfg.GEMINI_API_KEY)     document.getElementById('geminiKeyInput').value = cfg.GEMINI_API_KEY;
+      if (cfg.GEMINI_MODEL)       document.getElementById('geminiModelInput').value = cfg.GEMINI_MODEL;
+      if (cfg.TRANSCRIPT_API_KEY) document.getElementById('transcriptKeyInput').value = cfg.TRANSCRIPT_API_KEY;
+      YOUTUBE_API_KEY    = cfg.YOUTUBE_API_KEY    || '';
+      GEMINI_API_KEY     = cfg.GEMINI_API_KEY     || '';
+      GEMINI_MODEL       = cfg.GEMINI_MODEL       || 'gemini-2.5-flash';
+      TRANSCRIPT_API_KEY = cfg.TRANSCRIPT_API_KEY || '';
       if (YOUTUBE_API_KEY && GEMINI_API_KEY) {
         document.getElementById('apiPanelBody').classList.add('hidden');
         document.getElementById('apiToggleIcon').textContent = '▼ 펼치기';
@@ -428,9 +492,10 @@
 
   // ─── 키 저장 (.env에 기록) ───────────────────────
   window.saveKeys = async () => {
-    YOUTUBE_API_KEY = document.getElementById('ytKeyInput').value.trim();
-    GEMINI_API_KEY  = document.getElementById('geminiKeyInput').value.trim();
-    GEMINI_MODEL    = document.getElementById('geminiModelInput').value.trim() || 'gemini-2.5-flash';
+    YOUTUBE_API_KEY    = document.getElementById('ytKeyInput').value.trim();
+    GEMINI_API_KEY     = document.getElementById('geminiKeyInput').value.trim();
+    GEMINI_MODEL       = document.getElementById('geminiModelInput').value.trim() || 'gemini-2.5-flash';
+    TRANSCRIPT_API_KEY = document.getElementById('transcriptKeyInput').value.trim();
     if (!YOUTUBE_API_KEY || !GEMINI_API_KEY) {
       alert('YouTube API 키와 Gemini API 키를 모두 입력해주세요.');
       return;
@@ -439,7 +504,7 @@
       await fetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ YOUTUBE_API_KEY, GEMINI_API_KEY, GEMINI_MODEL })
+        body: JSON.stringify({ YOUTUBE_API_KEY, GEMINI_API_KEY, GEMINI_MODEL, TRANSCRIPT_API_KEY })
       });
     } catch (_) { /* 서버 없을 때 무시 */ }
     const el = document.getElementById('keySaved');
@@ -1324,6 +1389,256 @@ ${commentText}
     finally { btn.disabled = false; btn.textContent = '전송'; }
   }
 
+  // ── ▶️ YouTube Skills (TranscriptAPI) 채팅 ──────────
+  let ytApiHistory     = [];
+  let ytApiSystemPrompt = '';
+
+  const YT_API_GENERAL_PROMPT = `당신은 YouTube 데이터 조회 AI 어시스턴트입니다. TranscriptAPI.com을 통해 YouTube 영상 트랜스크립트, 검색, 채널 정보, 플레이리스트를 조회합니다.
+
+데이터를 조회해야 할 때는 응답 맨 앞에 반드시 다음 형식으로 API 호출을 명시하세요:
+<ACTION>{"endpoint": "/api/v2/youtube/...", "params": {"파라미터": "값"}}</ACTION>
+
+사용 가능한 엔드포인트:
+- /api/v2/youtube/transcript → params: video_url(필수), format(text/json), include_timestamp(true), send_metadata(true)
+- /api/v2/youtube/search → params: q(필수), type(video/channel), limit(1-50)
+- /api/v2/youtube/channel/search → params: channel(필수,@handle/URL/ID), q(필수), limit(1-50)
+- /api/v2/youtube/channel/resolve → params: input(필수) [무료, 크레딧 불필요]
+- /api/v2/youtube/channel/latest → params: channel(필수) [무료, 크레딧 불필요]
+- /api/v2/youtube/channel/videos → params: channel(@handle/URL/ID) 또는 continuation(다음 페이지 토큰)
+- /api/v2/youtube/playlist/videos → params: playlist(URL/ID) 또는 continuation(다음 페이지 토큰)
+
+한국어로 답변하세요. 마크다운 형식으로 구조화된 답변을 제공하세요.`;
+
+  const YT_API_SKILL_GREETINGS = {
+    '':               '안녕하세요! YouTube 데이터 조회 AI입니다 ▶️\n\n예시:\n• 유튜브 링크 붙여넣기 → 트랜스크립트 자동 추출\n• "AI 관련 영상 검색해줘"\n• "@TED 최신 영상 보여줘"\n• 플레이리스트 URL → 전체 목록 조회',
+    'transcript':     '트랜스크립트 모드입니다 📄\nYouTube 영상 URL이나 영상 ID를 입력하면 자막을 가져옵니다.\n\n예: https://youtube.com/watch?v=dQw4w9WgXcQ',
+    'youtube-search': '검색 모드입니다 🔍\n키워드로 YouTube 영상/채널을 검색합니다.\n\n예: "파이썬 머신러닝 강의 10개 찾아줘"',
+    'youtube-channels':'채널 모드입니다 📺\n@핸들이나 채널 URL로 최신 영상, 전체 목록을 불러옵니다.\n\n예: "@TED 최신 영상 목록 보여줘"',
+    'youtube-playlist':'플레이리스트 모드입니다 📋\nURL이나 ID로 플레이리스트 전체 영상 목록을 가져옵니다.\n\n예: https://youtube.com/playlist?list=PL...',
+  };
+
+  function fmtTime(secs) {
+    const m = Math.floor(secs / 60), s = Math.floor(secs % 60);
+    return `${m}:${String(s).padStart(2, '0')}`;
+  }
+
+  function formatTranscriptApiResult(endpoint, data) {
+    const lines = [];
+    if (endpoint.includes('/transcript')) {
+      const meta = data.metadata || {};
+      lines.push(`📄 트랜스크립트: ${meta.title || data.video_id || ''}`);
+      if (meta.author_name) lines.push(`채널: ${meta.author_name}`);
+      lines.push('─'.repeat(32));
+      const t = data.transcript;
+      if (typeof t === 'string') {
+        lines.push(t.length > 2500 ? t.slice(0, 2500) + '\n...(이하 생략)' : t);
+      } else if (Array.isArray(t)) {
+        t.slice(0, 60).forEach(s => {
+          const ts = s.start != null ? `[${fmtTime(s.start)}] ` : '';
+          lines.push(ts + (s.text || ''));
+        });
+        if (t.length > 60) lines.push(`...(${t.length - 60}개 더 있음)`);
+      }
+    } else if (endpoint.includes('/search')) {
+      const results = data.results || [];
+      lines.push(`🔍 검색 결과 ${results.length}개`);
+      lines.push('─'.repeat(32));
+      results.slice(0, 12).forEach((r, i) => {
+        if (r.type === 'channel') {
+          lines.push(`${i+1}. 📺 ${r.title}  ${r.handle || ''}  ${r.subscriberCount || ''}`);
+          lines.push(`   ${r.url || ''}`);
+        } else {
+          lines.push(`${i+1}. ${r.title}`);
+          lines.push(`   ${r.channelTitle || ''} | ${r.viewCountText || ''} | ${r.publishedTimeText || ''}`);
+          lines.push(`   https://youtu.be/${r.videoId}`);
+        }
+      });
+      if (results.length > 12) lines.push(`... 외 ${results.length - 12}개`);
+    } else if (endpoint.includes('/channel/latest')) {
+      const ch = data.channel || {};
+      const results = data.results || [];
+      lines.push(`📺 최신 동영상: ${ch.title || ''} (${results.length}개)`);
+      lines.push('─'.repeat(32));
+      results.forEach((r, i) => {
+        const date = (r.published || '').slice(0, 10);
+        const views = Number(r.viewCount || 0).toLocaleString();
+        lines.push(`${i+1}. ${r.title}`);
+        lines.push(`   조회수 ${views} | ${date}`);
+        lines.push(`   ${r.link || ''}`);
+      });
+    } else if (endpoint.includes('/channel/videos') || endpoint.includes('/channel/search')) {
+      const results = data.results || [];
+      const info = data.playlist_info || {};
+      const total = info.numVideos ? ` / 전체 ${info.numVideos}개` : '';
+      lines.push(`📺 채널 영상 (${results.length}개${total})`);
+      if (info.ownerName) lines.push(`채널: ${info.ownerName}`);
+      lines.push('─'.repeat(32));
+      results.slice(0, 15).forEach((r, i) => {
+        lines.push(`${i+1}. ${r.title}`);
+        lines.push(`   ${r.viewCountText || ''} | ${r.lengthText || ''}`);
+        lines.push(`   https://youtu.be/${r.videoId}`);
+      });
+      if (data.has_more) lines.push('\n▶ 다음 페이지 있음 (continuation_token 사용)');
+    } else if (endpoint.includes('/playlist')) {
+      const results = data.results || [];
+      const info = data.playlist_info || {};
+      const total = info.numVideos ? ` / 전체 ${info.numVideos}개` : '';
+      lines.push(`📋 플레이리스트: ${info.title || ''} (${results.length}개${total})`);
+      if (info.ownerName) lines.push(`소유자: ${info.ownerName}`);
+      lines.push('─'.repeat(32));
+      results.slice(0, 15).forEach((r, i) => {
+        lines.push(`${i+1}. ${r.title}`);
+        lines.push(`   ${r.viewCountText || ''} | ${r.lengthText || ''}`);
+        lines.push(`   https://youtu.be/${r.videoId}`);
+      });
+      if (data.has_more) lines.push('\n▶ 다음 페이지 있음');
+    } else if (endpoint.includes('/channel/resolve')) {
+      lines.push(`✅ 채널 ID: ${data.channel_id || '알 수 없음'}`);
+      if (data.resolved_from) lines.push(`입력값: ${data.resolved_from}`);
+    } else {
+      lines.push(JSON.stringify(data, null, 2).slice(0, 1000));
+    }
+    return lines.join('\n');
+  }
+
+  async function loadYtApiSkill(skillName) {
+    if (!skillName) {
+      ytApiSystemPrompt = YT_API_GENERAL_PROMPT;
+      return YT_API_SKILL_GREETINGS[''];
+    }
+    try {
+      const res = await fetch(`/api/yt-skill/${skillName}`);
+      if (!res.ok) throw new Error('not found');
+      const data = await res.json();
+      ytApiSystemPrompt = data.content +
+        '\n\n=== 중요 ===\n데이터를 조회해야 할 때는 응답 맨 앞에 반드시 다음 형식으로 API 호출을 명시하세요:\n<ACTION>{"endpoint": "/api/v2/youtube/...", "params": {"파라미터": "값"}}</ACTION>\n한국어로 답변하세요.';
+      return YT_API_SKILL_GREETINGS[skillName] || YT_API_SKILL_GREETINGS[''];
+    } catch(e) {
+      ytApiSystemPrompt = YT_API_GENERAL_PROMPT;
+      return YT_API_SKILL_GREETINGS[''];
+    }
+  }
+
+  async function sendYtApiChat() {
+    const input = document.getElementById('ytApiChatInput');
+    const text  = input.value.trim(); if (!text) return;
+    input.value = '';
+    chatBubble('ytApiChatMessages', 'user', text);
+    ytApiHistory.push({ role: 'user', parts: [{ text }] });
+
+    const btn = document.getElementById('ytApiChatSendBtn');
+    btn.disabled = true; btn.textContent = '…';
+
+    if (!TRANSCRIPT_API_KEY) {
+      chatBubble('ytApiChatMessages', 'ai',
+        '⚠️ TranscriptAPI 키가 설정되지 않았습니다.\n\n설정 방법:\n1. 위 "🔑 API 키 설정" 패널 열기\n2. TranscriptAPI 키 입력 (sk_...)\n3. 키 저장 클릭\n\n무료 가입: transcriptapi.com (카드 불필요, 100 크레딧 제공)');
+      btn.disabled = false; btn.textContent = '전송';
+      return;
+    }
+
+    const tid = chatBubble('ytApiChatMessages', 'ai', '분석 중...');
+    try {
+      const sysPrompt = ytApiSystemPrompt || YT_API_GENERAL_PROMPT;
+      const reply = await geminiChat(sysPrompt, ytApiHistory);
+
+      const actionMatch = reply.match(/<ACTION>([\s\S]*?)<\/ACTION>/);
+      if (actionMatch) {
+        let action;
+        try { action = JSON.parse(actionMatch[1].trim()); }
+        catch(e) { throw new Error('ACTION JSON 파싱 실패: ' + e.message); }
+
+        chatUpdateBubble(tid, `🔄 ${action.endpoint} 호출 중...`);
+
+        const apiRes = await fetch('/api/proxy/transcriptapi', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(action)
+        });
+        const apiData = await apiRes.json();
+
+        if (!apiRes.ok) {
+          const errMsg = apiData.detail || apiData.message || apiData.error || `HTTP ${apiRes.status}`;
+          throw new Error(`API 오류: ${errMsg}`);
+        }
+
+        const formatted = formatTranscriptApiResult(action.endpoint, apiData);
+
+        // 결과를 Gemini에게 분석 요청
+        const analyzeHistory = [
+          ...ytApiHistory.slice(-3),
+          { role: 'model', parts: [{ text: reply }] },
+          { role: 'user', parts: [{ text: `API 조회 결과:\n${JSON.stringify(apiData).slice(0, 4000)}\n\n위 데이터를 한국어로 간결하게 요약·분석해주세요.` }] }
+        ];
+        let analysis = '';
+        try {
+          analysis = await geminiChat(sysPrompt, analyzeHistory);
+          ytApiHistory.push({ role: 'model', parts: [{ text: formatted + '\n\n' + analysis }] });
+          chatUpdateBubble(tid, formatted + '\n\n' + analysis);
+        } catch(_) {
+          ytApiHistory.push({ role: 'model', parts: [{ text: formatted }] });
+          chatUpdateBubble(tid, formatted);
+        }
+
+      } else {
+        const cleanReply = reply.replace(/<ACTION>[\s\S]*?<\/ACTION>/g, '').trim();
+        ytApiHistory.push({ role: 'model', parts: [{ text: cleanReply }] });
+        chatUpdateBubble(tid, cleanReply);
+      }
+    } catch(e) {
+      chatUpdateBubble(tid, '오류: ' + e.message);
+    } finally {
+      btn.disabled = false; btn.textContent = '전송';
+    }
+  }
+
+  function initYtApiChatBindings() {
+    const toggle = document.getElementById('ytApiChatToggle');
+    if (!toggle) return;
+
+    toggle.addEventListener('click', () => {
+      const win    = document.getElementById('ytApiChatWindow');
+      const isOpen = win.classList.toggle('open');
+      if (isOpen && ytApiHistory.length === 0) {
+        if (!ytApiSystemPrompt) ytApiSystemPrompt = YT_API_GENERAL_PROMPT;
+        chatBubble('ytApiChatMessages', 'ai', YT_API_SKILL_GREETINGS['']);
+      }
+    });
+
+    document.getElementById('ytApiChatCloseBtn').addEventListener('click', () => {
+      document.getElementById('ytApiChatWindow').classList.remove('open');
+    });
+
+    document.getElementById('ytApiSkillBar').addEventListener('click', async e => {
+      const pill = e.target.closest('.yt-api-skill-pill');
+      if (!pill) return;
+      document.querySelectorAll('.yt-api-skill-pill').forEach(p => p.classList.remove('active'));
+      pill.classList.add('active');
+      const skillName = pill.dataset.skill;
+      document.getElementById('ytApiChatSkillName').textContent =
+        skillName ? pill.textContent.trim() + ' 스킬 활성화됨' : '일반 모드';
+      ytApiHistory = [];
+      document.getElementById('ytApiChatMessages').innerHTML = '';
+      const tid = chatBubble('ytApiChatMessages', 'ai', skillName ? '스킬 로딩 중...' : YT_API_SKILL_GREETINGS['']);
+      if (skillName) {
+        const greeting = await loadYtApiSkill(skillName);
+        chatUpdateBubble(tid, greeting);
+      } else {
+        loadYtApiSkill('');
+      }
+    });
+
+    document.getElementById('ytApiChatSendBtn').addEventListener('click', sendYtApiChat);
+    document.getElementById('ytApiChatInput').addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendYtApiChat(); }
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initYtApiChatBindings);
+  } else {
+    initYtApiChatBindings();
+  }
+
   // ytChat 이벤트 바인딩 — DOM이 완전히 준비된 후 실행 보장
   function initYtChatBindings() {
     const toggle = document.getElementById('ytChatToggle');
@@ -1446,7 +1761,34 @@ ${commentText}
   </button>
 </div>
 
-<!-- ── 이미지 프롬프트 채팅 위젯 ── -->
+<!-- ── YouTube Skills (TranscriptAPI) 채팅 위젯 ── -->
+<div id="ytApiChatWindow">
+  <div class="flex items-center justify-between px-4 py-3 border-b border-slate-700 flex-shrink-0">
+    <div>
+      <p class="text-sm font-bold text-cyan-300">▶️ YouTube Skills</p>
+      <p id="ytApiChatSkillName" class="text-[11px] text-slate-500">트랜스크립트 · 검색 · 채널 · 플레이리스트</p>
+    </div>
+    <button id="ytApiChatCloseBtn" class="text-slate-400 hover:text-white text-lg leading-none">✕</button>
+  </div>
+  <div id="ytApiSkillBar" class="flex gap-1.5 px-3 py-2 border-b border-slate-700 overflow-x-auto flex-shrink-0">
+    <button class="yt-api-skill-pill active" data-skill="">💬 일반</button>
+    <button class="yt-api-skill-pill" data-skill="transcript">📄 트랜스크립트</button>
+    <button class="yt-api-skill-pill" data-skill="youtube-search">🔍 검색</button>
+    <button class="yt-api-skill-pill" data-skill="youtube-channels">📺 채널</button>
+    <button class="yt-api-skill-pill" data-skill="youtube-playlist">📋 플레이리스트</button>
+  </div>
+  <div id="ytApiChatMessages"></div>
+  <div class="flex gap-2 p-3 border-t border-slate-700 flex-shrink-0">
+    <textarea id="ytApiChatInput" rows="2"
+      placeholder="YouTube URL, 검색어, @채널핸들 등을 입력하세요... (Enter 전송)"
+      class="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 resize-none focus:outline-none focus:border-cyan-500"></textarea>
+    <button id="ytApiChatSendBtn"
+      class="bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold px-3 rounded-lg transition flex-shrink-0">
+      전송
+    </button>
+  </div>
+</div>
+<button id="ytApiChatToggle" title="YouTube Skills (TranscriptAPI)">▶️</button>
 
 </body>
 </html>
