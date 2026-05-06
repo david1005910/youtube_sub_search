@@ -93,12 +93,15 @@
     #ytChatWindow {
       width: 520px; height: 700px;
       background: #1e293b; border: 1px solid #334155;
-      border-radius: 16px; display: flex; flex-direction: column;
+      border-radius: 16px; flex-direction: column;
       box-shadow: 0 20px 60px rgba(0,0,0,0.6);
       transition: opacity 0.2s, transform 0.2s;
       overflow: hidden;
+      display: none; opacity: 0;
     }
-    #ytChatWindow.hidden { opacity: 0; pointer-events: none; transform: translateY(12px); }
+    #ytChatWindow.open {
+      display: flex; opacity: 1; transform: none;
+    }
     #ytChatMessages {
       flex: 1; min-height: 0; overflow-y: scroll; padding: 14px;
       display: flex; flex-direction: column; gap: 10px;
@@ -300,8 +303,8 @@
     <div class="flex gap-3 mb-4">
       <input id="keyword" type="text" placeholder="검색 키워드 입력 (예: 재테크, 다이어트, AI 활용법)"
         class="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500"
-        onkeydown="if(event.key==='Enter') search()" />
-      <button onclick="search()" id="searchBtn"
+        onkeydown="if(event.key==='Enter') window.runSearch()" />
+      <button onclick="window.runSearch()" id="searchBtn"
         class="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-6 py-2.5 rounded-lg flex items-center gap-2 whitespace-nowrap transition">
         <span id="searchBtnText">검색</span>
         <span id="searchSpinner" class="spinner hidden" style="width:18px;height:18px;border-width:2px"></span>
@@ -451,7 +454,7 @@
   };
 
   // ─── 검색 ───────────────────────────────────────
-  window.search = async () => {
+  window.runSearch = async () => {
     const keyword    = document.getElementById('keyword').value.trim();
     const formType   = document.getElementById('videoType').value;   // '' | 'short' | 'long'
     const minRatio   = Number(document.getElementById('minRatio').value);
@@ -1325,48 +1328,61 @@ ${commentText}
     finally { btn.disabled = false; btn.textContent = '전송'; }
   }
 
-  document.getElementById('ytChatToggle').addEventListener('click', () => {
-    const win = document.getElementById('ytChatWindow');
-    win.classList.toggle('hidden');
-    if (!win.classList.contains('hidden') && ytHistory.length === 0) {
-      if (!ytSystemPrompt) ytSystemPrompt = YT_GENERAL_PROMPT;
-      chatBubble('ytChatMessages', 'ai', YT_SKILL_GREETINGS['']);
-    }
-  });
+  // ytChat 이벤트 바인딩 — DOM이 완전히 준비된 후 실행 보장
+  function initYtChatBindings() {
+    const toggle = document.getElementById('ytChatToggle');
+    if (!toggle) return;  // 이미 바인딩됐거나 요소 없으면 무시
 
-  document.getElementById('ytChatCloseBtn').addEventListener('click', () => {
-    document.getElementById('ytChatWindow').classList.add('hidden');
-  });
+    toggle.addEventListener('click', () => {
+      const win = document.getElementById('ytChatWindow');
+      const isOpen = win.classList.toggle('open');
+      if (isOpen && ytHistory.length === 0) {
+        if (!ytSystemPrompt) ytSystemPrompt = YT_GENERAL_PROMPT;
+        chatBubble('ytChatMessages', 'ai', YT_SKILL_GREETINGS['']);
+      }
+    });
 
-  document.getElementById('ytSkillBar').addEventListener('click', async e => {
-    const pill = e.target.closest('.yt-skill-pill');
-    if (!pill) return;
-    document.querySelectorAll('.yt-skill-pill').forEach(p => p.classList.remove('active'));
-    pill.classList.add('active');
-    const skillName = pill.dataset.skill;
-    document.getElementById('ytChatSkillName').textContent =
-      skillName ? pill.textContent.trim() + ' 스킬 활성화됨' : '일반 모드';
-    ytHistory = [];
-    document.getElementById('ytChatMessages').innerHTML = '';
-    const tid = chatBubble('ytChatMessages', 'ai', skillName ? '스킬 로딩 중...' : YT_SKILL_GREETINGS['']);
-    if (skillName) {
-      const greeting = await loadYtSkill(skillName);
-      chatUpdateBubble(tid, greeting);
-    } else {
-      loadYtSkill('');
-    }
-  });
+    document.getElementById('ytChatCloseBtn').addEventListener('click', () => {
+      document.getElementById('ytChatWindow').classList.remove('open');
+    });
 
-  document.getElementById('ytChatSendBtn').addEventListener('click', sendYtChat);
-  document.getElementById('ytChatInput').addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendYtChat(); }
-  });
+    document.getElementById('ytSkillBar').addEventListener('click', async e => {
+      const pill = e.target.closest('.yt-skill-pill');
+      if (!pill) return;
+      document.querySelectorAll('.yt-skill-pill').forEach(p => p.classList.remove('active'));
+      pill.classList.add('active');
+      const skillName = pill.dataset.skill;
+      document.getElementById('ytChatSkillName').textContent =
+        skillName ? pill.textContent.trim() + ' 스킬 활성화됨' : '일반 모드';
+      ytHistory = [];
+      document.getElementById('ytChatMessages').innerHTML = '';
+      const tid = chatBubble('ytChatMessages', 'ai', skillName ? '스킬 로딩 중...' : YT_SKILL_GREETINGS['']);
+      if (skillName) {
+        const greeting = await loadYtSkill(skillName);
+        chatUpdateBubble(tid, greeting);
+      } else {
+        loadYtSkill('');
+      }
+    });
+
+    document.getElementById('ytChatSendBtn').addEventListener('click', sendYtChat);
+    document.getElementById('ytChatInput').addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendYtChat(); }
+    });
+  }
+
+  // 모듈 deferred 실행 + DOMContentLoaded 이중 보장
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initYtChatBindings);
+  } else {
+    initYtChatBindings();
+  }
 
 </script>
 
 <!-- ── YouTube Creator AI 채팅 위젯 ── -->
 <div id="ytChat">
-  <div id="ytChatWindow" class="hidden">
+  <div id="ytChatWindow">
     <div class="flex items-center justify-between px-4 py-3 border-b border-slate-700 flex-shrink-0">
       <div>
         <p class="text-sm font-bold text-emerald-300">🎬 YouTube Creator AI</p>
