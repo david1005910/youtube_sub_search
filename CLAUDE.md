@@ -4,47 +4,76 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This project is a specification for a **YouTube Content Material Discovery Tool** (유튜브 소재 발굴 도구). The file `소재찾기.docx` contains a detailed AI prompt that generates a complete, runnable single-file web application.
+A **YouTube Content Material Discovery Tool** (유튜브 소재 발굴 도구) — a single-file web app that finds high-viral-ratio YouTube videos, collects comments, and runs Gemini AI analysis to generate script outlines.
 
-## Target Output
+## Running the App
 
-The goal is to produce a single `index.html` file that can be opened directly in a browser with no build step.
+Two modes:
 
-## Tech Stack
+**Direct browser** (no server): open `index.html` directly. API keys must be entered in the UI on every session (not persisted).
 
-- **HTML5 / CSS3 / Vanilla JavaScript** — no frameworks, no bundler
-- **Tailwind CSS** via CDN
-- **YouTube Data API v3** — video search, video details (view count), channel details (subscriber count)
-- **Gemini 1.5 Flash** (`gemini-1.5-flash`) via Google AI SDK (ES module import)
+**Local server** (recommended — persists API keys via `.env`):
+```bash
+python3 server.py        # starts at http://localhost:8765
+```
+The server reads/writes `.env` for key persistence and proxies TranscriptAPI calls to avoid CORS.
 
-## Core Architecture
+## Architecture
 
-All logic lives in one file. The key layers are:
+### `index.html` — the entire frontend (~87 KB, single file)
 
-1. **API config block** — `YOUTUBE_API_KEY` and `GEMINI_API_KEY` constants at the top of the `<script>` tag, with comments directing the user to replace them.
+All logic is vanilla JS ES modules with Tailwind CSS (CDN). Key sections in order:
 
-2. **Search & filter pipeline**
-   - Keyword → YouTube Search API → list of video IDs
-   - Batch fetch video details (view count) and channel details (subscriber count)
-   - Compute **View-to-Sub Ratio** = `(views / subscribers) * 100` for each result
-   - Sort results descending by ratio (high ratio = strong content angle)
+1. **CSS block** — dark-mode styles, spinner, ratio bar, script-section cards, three chat widget styles
+2. **HTML layout** — viral-ratio explainer panel → API key inputs → search filters → results grid
+3. **JavaScript** — one large `<script type="module">` at the bottom:
+   - `loadConfig()` / `saveConfig()` — fetch from `GET/POST /api/config` when server mode; falls back to sessionStorage
+   - **Search pipeline**: keyword → `youtube.search.list` → batch `youtube.videos.list` (view count) + `youtube.channels.list` (subscriber count) → compute `viralRatio = views/subs*100` → sort descending
+   - **Comment analysis**: per-video `youtube.commentThreads.list` (top 50) → Gemini prompt → returns reactions, pain points, top-5 keywords, viral-factor scores, and 5 topic suggestions
+   - **Script generation**: user picks a topic + word count → second Gemini call → structured outline with title candidates, thumbnail concept, hook, chapters, CTA
+   - **Three chat widgets** (fixed-position floating buttons, bottom-right):
+     - Purple `#scriptImgChatToggle` — image-based script chat (Gemini multimodal)
+     - Green `#ytChatToggle` — YouTube Creator AI (claude-youtube-main skills)
+     - Blue `#ytApiChatToggle` — YouTube TranscriptAPI chat (youtube-skills-main skills)
 
-3. **Comment collection** — triggered per-video via a "댓글 분석" button; fetches top 50 comments for that video.
+### `server.py` — lightweight Python HTTP server
 
-4. **Gemini analysis** — sends video title + collected comments to Gemini 1.5 Flash and returns:
-   - Positive viewer reactions
-   - Pain points / unanswered questions
-   - 3 next-video ideas with specific production directions
+Extends `SimpleHTTPRequestHandler`. API endpoints:
 
-5. **UI** — dark-mode, card-based results with loading spinners; cards link out to the YouTube video.
+| Route | Purpose |
+|---|---|
+| `GET /api/config` | Return `.env` key values |
+| `POST /api/config` | Persist keys to `.env` |
+| `GET /api/skills` | List claude-youtube-main sub-skills |
+| `GET /api/skill/<name>` | Return SKILL.md content for a sub-skill |
+| `GET /api/yt-skills` | List youtube-skills-main skills |
+| `GET /api/yt-skill/<name>` | Return SKILL.md content |
+| `POST /api/proxy/transcriptapi` | Proxy to transcriptapi.com (requires `TRANSCRIPT_API_KEY`) |
 
-## API Key Setup
+All other paths are served as static files from the project root.
 
-When generating or editing the HTML file, the two keys the user must supply are:
+### Skill directories
 
-- **YouTube Data API v3**: Google Cloud Console → create project → enable "YouTube Data API v3" → Credentials → API key
-- **Gemini API key**: Google AI Studio (free tier available)
+- `claude-youtube-main/` — YouTube Creator AI skill (14 sub-skills under `skills/claude-youtube/sub-skills/`)
+- `youtube-skills-main/` — TranscriptAPI-based skills (transcript, playlist, channel, search, subtitles, etc.)
 
-## API Quota Considerations
+### `remotion/` — subtitle renderer (stub)
 
-YouTube Data API v3 has a daily quota (10,000 units by default). Each search costs 100 units; video/channel detail fetches cost 1–3 units each. Batch video/channel calls to minimize quota usage.
+`package.json` is present (`subtitle-renderer`, Remotion 4.0.457 + Express). No source files yet — this is a planned video subtitle burn-in feature. Run with `node render-server.mjs` once source is added.
+
+## API Keys (stored in `.env`)
+
+| Key | Used for |
+|---|---|
+| `YOUTUBE_API_KEY` | YouTube Data API v3 (search, videos, channels, comments) |
+| `GEMINI_API_KEY` | Gemini AI (comment analysis, script generation, image chat) |
+| `GEMINI_MODEL` | Model name, default `gemini-2.5-flash` |
+| `TRANSCRIPT_API_KEY` | transcriptapi.com (TranscriptAPI chat widget) |
+
+## API Quota
+
+YouTube Data API v3: 10,000 units/day free. One full search costs ~200–300 units (100 search + ~1–3/video + ~1/channel).
+
+## Key Metrics
+
+**Viral Ratio** = `(views ÷ subscribers) × 100`. The main sort key. ≥200% = verified material, ≥500% = strong viral, ≥1000% = algorithm explosion.
