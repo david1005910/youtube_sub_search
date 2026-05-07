@@ -212,6 +212,33 @@
       font-family: monospace; white-space: pre-wrap; word-break: break-all;
       color: #93c5fd; max-height: 300px; overflow-y: auto;
     }
+    /* ── 자막 렌더러 위젯 ── */
+    #subtitleRenderToggle {
+      position: fixed; bottom: 24px; right: 222px; z-index: 1000;
+      width: 52px; height: 52px; border-radius: 50%;
+      background: linear-gradient(135deg, #d97706, #b45309);
+      border: none; cursor: pointer; font-size: 22px;
+      box-shadow: 0 4px 20px rgba(217,119,6,0.5);
+      transition: transform 0.2s;
+    }
+    #subtitleRenderToggle:hover { transform: scale(1.08); }
+    #subtitleRenderWindow {
+      position: fixed; right: 222px; z-index: 999;
+      bottom: calc(24px + 52px + 10px);
+      width: 500px;
+      height: min(680px, calc(100vh - 100px));
+      background: #1e293b; border: 1px solid #334155;
+      border-radius: 16px; flex-direction: column;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+      overflow: hidden; display: none;
+    }
+    #subtitleRenderWindow.open { display: flex; }
+    #subtitleRenderBody {
+      flex: 1; min-height: 0; overflow-y: auto; padding: 16px;
+    }
+    #subtitleRenderBody::-webkit-scrollbar { width: 6px; }
+    #subtitleRenderBody::-webkit-scrollbar-track { background: #0f172a; }
+    #subtitleRenderBody::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
   </style>
 </head>
 <body class="text-slate-100 min-h-screen">
@@ -1689,6 +1716,171 @@ ${commentText}
     initYtChatBindings();
   }
 
+  // ── 🎞️ Subtitle Renderer Widget ─────────────────────
+  const RENDER_URL = 'http://localhost:8766';
+  let _renderSubs = [];
+  let _renderTranslatedSubs = [];
+
+  async function checkRenderServer() {
+    try {
+      const res = await fetch(`${RENDER_URL}/health`, {
+        signal: AbortSignal.timeout(2000)
+      });
+      return res.ok;
+    } catch { return false; }
+  }
+
+  function initSubtitleRenderWidget() {
+    const toggle = document.getElementById('subtitleRenderToggle');
+    if (!toggle) return;
+
+    toggle.addEventListener('click', async () => {
+      const win    = document.getElementById('subtitleRenderWindow');
+      const isOpen = win.classList.toggle('open');
+      if (isOpen) {
+        const statusEl = document.getElementById('renderServerStatus');
+        statusEl.textContent = '서버 상태 확인 중...';
+        statusEl.className   = 'text-[11px] text-slate-400';
+        const ok = await checkRenderServer();
+        statusEl.textContent = ok
+          ? '✅ 렌더 서버 연결됨 (localhost:8766)'
+          : '❌ 서버 오프라인 — cd remotion && npm start 필요';
+        statusEl.className   = ok ? 'text-[11px] text-green-400' : 'text-[11px] text-red-400';
+      }
+    });
+
+    document.getElementById('subtitleRenderCloseBtn').addEventListener('click', () => {
+      document.getElementById('subtitleRenderWindow').classList.remove('open');
+    });
+
+    document.getElementById('translateToggle').addEventListener('change', function () {
+      document.getElementById('translatePanel').classList.toggle('hidden', !this.checked);
+    });
+
+    document.getElementById('fetchSubsBtn').addEventListener('click', async () => {
+      const ytUrl = document.getElementById('renderYtUrl').value.trim();
+      if (!ytUrl) { alert('YouTube URL을 입력해주세요.'); return; }
+      if (!TRANSCRIPT_API_KEY) { alert('TranscriptAPI 키를 먼저 설정해주세요.'); return; }
+
+      const btn = document.getElementById('fetchSubsBtn');
+      btn.disabled = true; btn.textContent = '로딩...';
+      try {
+        const res = await fetch('/api/proxy/transcriptapi', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            endpoint: '/api/v2/youtube/transcript',
+            params: { video_url: ytUrl, format: 'json', include_timestamp: 'true', send_metadata: 'true' }
+          })
+        });
+        if (!res.ok) { const e = await res.json(); throw new Error(e.error || `HTTP ${res.status}`); }
+        const data = await res.json();
+        _renderSubs = Array.isArray(data.transcript) ? data.transcript : [];
+        _renderTranslatedSubs = [];
+        if (!_renderSubs.length) throw new Error('자막이 없는 영상입니다.');
+
+        // Auto-fill duration from last segment
+        const lastSeg = _renderSubs[_renderSubs.length - 1];
+        if (lastSeg) {
+          document.getElementById('renderDuration').value =
+            Math.ceil(lastSeg.start + (lastSeg.duration || 2));
+        }
+
+        document.getElementById('subsPreview').classList.remove('hidden');
+        document.getElementById('subsCount').textContent =
+          `✅ 자막 ${_renderSubs.length}개 로드됨` +
+          (data.metadata?.title ? ` — ${data.metadata.title}` : '');
+        document.getElementById('translateToggle').checked = false;
+        document.getElementById('translatePanel').classList.add('hidden');
+        document.getElementById('translateStatus').textContent = '';
+        document.getElementById('translateStatus').classList.add('hidden');
+      } catch (e) {
+        alert('자막 가져오기 실패: ' + e.message);
+      } finally {
+        btn.disabled = false; btn.textContent = '자막 가져오기';
+      }
+    });
+
+    document.getElementById('doTranslateBtn').addEventListener('click', async () => {
+      if (!_renderSubs.length) { alert('먼저 자막을 가져오세요.'); return; }
+      if (!GEMINI_API_KEY) { alert('Gemini API 키를 설정해주세요.'); return; }
+      const targetLang = document.getElementById('translateLangSelect').value;
+      const statusEl = document.getElementById('translateStatus');
+      statusEl.textContent = `${targetLang}로 번역 중...`;
+      statusEl.classList.remove('hidden');
+      const btn = document.getElementById('doTranslateBtn');
+      btn.disabled = true;
+      try {
+        const texts = _renderSubs.map(s => s.text).join('\n---SEP---\n');
+        const prompt = `Translate the following subtitle lines into ${targetLang}. Lines are separated by ---SEP---. Output ONLY the translated lines keeping the same ---SEP--- separators, no other text.\n\n${texts}`;
+        const result = await callGemini(prompt);
+        const parts  = result.split('---SEP---').map(t => t.trim());
+        _renderTranslatedSubs = _renderSubs.map((s, i) => ({ ...s, text: parts[i] || s.text }));
+        statusEl.textContent = `✅ ${_renderTranslatedSubs.length}개 번역 완료 (${targetLang})`;
+      } catch (e) {
+        statusEl.textContent = '번역 실패: ' + e.message;
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    document.getElementById('startRenderBtn').addEventListener('click', async () => {
+      const videoSrc    = document.getElementById('renderVideoSrc').value.trim();
+      const durationSec = parseFloat(document.getElementById('renderDuration').value);
+      if (!videoSrc)    { alert('영상 경로 또는 URL을 입력해주세요.'); return; }
+      if (!durationSec) { alert('영상 길이(초)를 입력해주세요.'); return; }
+      if (!_renderSubs.length) { alert('먼저 자막을 가져오세요.'); return; }
+
+      const btn      = document.getElementById('startRenderBtn');
+      const spinner  = document.getElementById('renderSpinner');
+      const txtEl    = document.getElementById('renderBtnText');
+      const progress = document.getElementById('renderProgress');
+      const progText = document.getElementById('renderProgressText');
+      btn.disabled = true; spinner.classList.remove('hidden');
+      txtEl.textContent = '렌더링 중...'; progress.classList.remove('hidden');
+      progText.textContent = '렌더링 중... (영상 길이에 따라 수 분 소요)';
+      progText.className = 'text-sm text-amber-300';
+
+      try {
+        const res = await fetch(`${RENDER_URL}/render`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            videoSrc,
+            subtitles: _renderSubs,
+            translatedSubtitles: _renderTranslatedSubs,
+            durationInSeconds: durationSec,
+          })
+        });
+        if (!res.ok) {
+          const e = await res.json().catch(() => ({}));
+          throw new Error(e.error || `HTTP ${res.status}`);
+        }
+        const blob = await res.blob();
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href = url; a.download = `subtitled-${Date.now()}.mp4`;
+        document.body.appendChild(a); a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        progText.textContent = '✅ 렌더링 완료! MP4 다운로드 시작됨';
+        progText.className   = 'text-sm text-green-400';
+      } catch (e) {
+        progText.textContent = '오류: ' + e.message;
+        progText.className   = 'text-sm text-red-400';
+      } finally {
+        btn.disabled = false; spinner.classList.add('hidden');
+        txtEl.textContent = '🎞️ 자막 렌더링 시작';
+      }
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initSubtitleRenderWidget);
+  } else {
+    initSubtitleRenderWidget();
+  }
+
 </script>
 
 <!-- ── YouTube Creator AI 채팅 위젯 ── -->
@@ -1789,6 +1981,92 @@ ${commentText}
   </div>
 </div>
 <button id="ytApiChatToggle" title="YouTube Skills (TranscriptAPI)">▶️</button>
+
+<!-- ── 자막 굽기 위젯 (Remotion) ── -->
+<div id="subtitleRenderWindow">
+  <div class="flex items-center justify-between px-4 py-3 border-b border-slate-700 flex-shrink-0">
+    <div>
+      <p class="text-sm font-bold text-amber-300">🎞️ 자막 굽기</p>
+      <p id="renderServerStatus" class="text-[11px] text-slate-500">Remotion 렌더 서버 (localhost:8766)</p>
+    </div>
+    <button id="subtitleRenderCloseBtn" class="text-slate-400 hover:text-white text-lg leading-none">✕</button>
+  </div>
+  <div id="subtitleRenderBody">
+
+    <!-- ① 영상 소스 -->
+    <div class="bg-slate-900/60 border border-slate-700 rounded-xl p-4 mb-4">
+      <p class="text-xs font-bold text-amber-300 mb-3">① 영상 파일 경로 또는 URL</p>
+      <input id="renderVideoSrc" type="text"
+        placeholder="/home/user/video.mp4  또는  https://example.com/clip.mp4"
+        class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500 mb-2" />
+      <div>
+        <label class="block text-[10px] text-slate-500 mb-1">영상 길이 (초) — 자막 로드 시 자동 입력</label>
+        <input id="renderDuration" type="number" min="1" placeholder="예: 300"
+          class="w-32 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500" />
+      </div>
+    </div>
+
+    <!-- ② 자막 가져오기 -->
+    <div class="bg-slate-900/60 border border-slate-700 rounded-xl p-4 mb-4">
+      <p class="text-xs font-bold text-amber-300 mb-3">② 자막 가져오기 (TranscriptAPI)</p>
+      <div class="flex gap-2 mb-3">
+        <input id="renderYtUrl" type="text"
+          placeholder="YouTube URL 또는 영상 ID"
+          class="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500" />
+        <button id="fetchSubsBtn"
+          class="bg-amber-700 hover:bg-amber-600 text-white text-xs font-bold px-3 py-2 rounded-lg transition whitespace-nowrap">
+          자막 가져오기
+        </button>
+      </div>
+      <div id="subsPreview" class="hidden">
+        <p id="subsCount" class="text-[11px] text-green-400 mb-3"></p>
+        <div class="border-t border-slate-700 pt-3">
+          <label class="flex items-center gap-2 cursor-pointer mb-2">
+            <input id="translateToggle" type="checkbox" class="accent-amber-500" />
+            <span class="text-xs text-slate-300">Gemini 번역으로 2중 자막 추가</span>
+          </label>
+          <div id="translatePanel" class="hidden">
+            <div class="flex gap-2 items-center mt-1">
+              <select id="translateLangSelect"
+                class="bg-slate-900 border border-slate-600 rounded-lg px-2 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-amber-500">
+                <option value="Korean">한국어</option>
+                <option value="English">English</option>
+                <option value="Japanese">日本語</option>
+                <option value="Chinese Simplified">中文(简体)</option>
+              </select>
+              <button id="doTranslateBtn"
+                class="bg-indigo-700 hover:bg-indigo-600 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition">
+                번역하기
+              </button>
+            </div>
+          </div>
+          <p id="translateStatus" class="text-[11px] text-slate-500 mt-1.5 hidden"></p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ③ 렌더링 -->
+    <div class="bg-slate-900/60 border border-slate-700 rounded-xl p-4">
+      <p class="text-xs font-bold text-amber-300 mb-2">③ 렌더링</p>
+      <p class="text-[11px] text-slate-500 mb-3">
+        렌더 서버 실행:
+        <code class="bg-slate-800 px-1.5 py-0.5 rounded text-amber-400">cd remotion &amp;&amp; npm start</code>
+      </p>
+      <button id="startRenderBtn"
+        class="w-full bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500
+               text-white text-sm font-bold py-2.5 rounded-xl transition flex items-center justify-center gap-2">
+        <span id="renderBtnText">🎞️ 자막 렌더링 시작</span>
+        <span id="renderSpinner" class="spinner hidden" style="width:16px;height:16px;border-width:2px;border-top-color:#fff"></span>
+      </button>
+      <div id="renderProgress" class="hidden mt-3 text-center">
+        <p id="renderProgressText" class="text-sm text-amber-300">렌더링 중...</p>
+        <p class="text-xs text-slate-500 mt-0.5">완료되면 MP4 파일이 자동으로 다운로드됩니다</p>
+      </div>
+    </div>
+
+  </div>
+</div>
+<button id="subtitleRenderToggle" title="자막 굽기 (Remotion)">🎞️</button>
 
 </body>
 </html>

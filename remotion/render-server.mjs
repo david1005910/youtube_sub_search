@@ -30,6 +30,14 @@ const require = createRequire(import.meta.url);
 const app = express();
 app.use(express.json({ limit: '50mb' }));
 
+app.use((_req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (_req.method === 'OPTIONS') { res.sendStatus(200); return; }
+  next();
+});
+
 const OUTPUT_DIR = path.join(__dirname, 'output');
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
