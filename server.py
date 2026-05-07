@@ -18,6 +18,7 @@ def load_env():
         'GEMINI_API_KEY': '',
         'GEMINI_MODEL': 'gemini-2.5-flash',
         'TRANSCRIPT_API_KEY': '',
+        'XAI_API_KEY': '',
     }
     if ENV_FILE.exists():
         for line in ENV_FILE.read_text(encoding='utf-8').splitlines():
@@ -33,6 +34,7 @@ def save_env(data):
         f"GEMINI_API_KEY={data.get('GEMINI_API_KEY', '')}\n"
         f"GEMINI_MODEL={data.get('GEMINI_MODEL', 'gemini-2.5-flash')}\n"
         f"TRANSCRIPT_API_KEY={data.get('TRANSCRIPT_API_KEY', '')}\n"
+        f"XAI_API_KEY={data.get('XAI_API_KEY', '')}\n"
     )
     ENV_FILE.write_text(content, encoding='utf-8')
 
@@ -143,6 +145,45 @@ class Handler(SimpleHTTPRequestHandler):
             })
             try:
                 with urllib.request.urlopen(req, timeout=20) as resp:
+                    resp_body = resp.read()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', len(resp_body))
+                self.end_headers()
+                self.wfile.write(resp_body)
+            except urllib.error.HTTPError as e:
+                err_body = e.read() or b'{}'
+                self.send_response(e.code)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', len(err_body))
+                self.end_headers()
+                self.wfile.write(err_body)
+            except Exception as e:
+                _send_json(self, 500, {'error': str(e)})
+
+        elif self.path == '/api/proxy/grok-image':
+            data = json.loads(body_raw)
+            api_key = load_env().get('XAI_API_KEY', '')
+            if not api_key:
+                _send_json(self, 400, {'error': 'XAI_API_KEY not set'}); return
+
+            req_body = json.dumps({
+                'model': data.get('model', 'grok-2-image-1212'),
+                'prompt': data.get('prompt', ''),
+                'n': 1,
+                'response_format': 'url',
+            }).encode('utf-8')
+            req = urllib.request.Request(
+                'https://api.x.ai/v1/images/generations',
+                data=req_body,
+                headers={
+                    'Authorization': f'Bearer {api_key}',
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'YouTubeContentTool/1.0',
+                }
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=60) as resp:
                     resp_body = resp.read()
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
