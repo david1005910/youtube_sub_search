@@ -404,20 +404,29 @@
     <div id="apiPanelBody" class="mt-4">
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
         <div>
-          <label class="block text-xs text-slate-400 mb-1">YouTube Data API v3 키</label>
+          <div class="flex items-center justify-between mb-1">
+            <label class="text-xs text-slate-400">YouTube Data API v3 키</label>
+            <span id="ytKeySaved" class="text-[11px] text-green-400 hidden">✓ 저장됨</span>
+          </div>
           <input id="ytKeyInput" type="password" placeholder="AIza..."
             class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" />
           <p class="text-xs text-slate-500 mt-1">Google Cloud Console → YouTube Data API v3 활성화 후 발급</p>
         </div>
         <div>
-          <label class="block text-xs text-slate-400 mb-1">Gemini API 키</label>
+          <div class="flex items-center justify-between mb-1">
+            <label class="text-xs text-slate-400">Gemini API 키</label>
+            <span id="geminiKeySaved" class="text-[11px] text-green-400 hidden">✓ 저장됨</span>
+          </div>
           <input id="geminiKeyInput" type="password" placeholder="AIza..."
             class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" />
           <p class="text-xs text-slate-500 mt-1"><a href="https://aistudio.google.com/app/apikey" target="_blank" class="text-indigo-400 underline">Google AI Studio</a>에서 무료 발급</p>
         </div>
       </div>
       <div class="mb-4">
-        <label class="block text-xs text-slate-400 mb-1">Gemini 모델명</label>
+        <div class="flex items-center justify-between mb-1">
+          <label class="text-xs text-slate-400">Gemini 모델명</label>
+          <span id="modelSaved" class="text-[11px] text-green-400 hidden">✓ 저장됨</span>
+        </div>
         <input id="geminiModelInput" type="text" value="gemini-2.5-flash"
           class="w-full md:w-72 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" />
         <p class="text-xs text-slate-500 mt-1">404 오류 시 AI Studio에서 사용 가능한 모델명 확인 후 변경</p>
@@ -430,7 +439,10 @@
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label class="block text-xs text-slate-400 mb-1">TranscriptAPI 키</label>
+            <div class="flex items-center justify-between mb-1">
+              <label class="text-xs text-slate-400">TranscriptAPI 키</label>
+              <span id="transcriptKeySaved" class="text-[11px] text-green-400 hidden">✓ 저장됨</span>
+            </div>
             <input id="transcriptKeyInput" type="password" placeholder="sk_..."
               class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-cyan-500" />
             <p class="text-xs text-slate-500 mt-1">transcriptapi.com 가입 후 발급 (신용카드 불필요)</p>
@@ -439,13 +451,9 @@
       </div>
       <!-- Gemini 이미지 생성 안내 -->
       <div class="border-t border-slate-600/50 pt-4 mt-1 mb-4">
-        <p class="text-xs text-blue-400">🎨 이미지 생성은 위의 <strong>Gemini API 키</strong>를 사용합니다 (Imagen 3 모델)</p>
+        <p class="text-xs text-blue-400">🎨 이미지 생성은 위의 <strong>Gemini API 키</strong>를 사용합니다 (Imagen 4 모델)</p>
       </div>
-      <button onclick="saveKeys()"
-        class="bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-5 py-2 rounded-lg transition">
-        키 저장
-      </button>
-      <span id="keySaved" class="ml-3 text-green-400 text-sm hidden">✓ 저장 완료</span>
+      <span id="keySaved" class="text-green-400 text-sm hidden">✓ 저장 완료</span>
     </div>
   </div>
 
@@ -596,16 +604,13 @@
   })();
 
   // ─── 키 저장 (.env에 기록) ───────────────────────
-  window.saveKeys = async () => {
+  // 현재 입력 값을 모두 읽어 저장 (검증 없음)
+  async function persistKeys() {
     YOUTUBE_API_KEY    = document.getElementById('ytKeyInput').value.trim();
     GEMINI_API_KEY     = document.getElementById('geminiKeyInput').value.trim();
     GEMINI_MODEL       = document.getElementById('geminiModelInput').value.trim() || 'gemini-2.5-flash';
     TRANSCRIPT_API_KEY = document.getElementById('transcriptKeyInput').value.trim();
-    XAI_API_KEY        = document.getElementById('xaiKeyInput').value.trim();
-    if (!YOUTUBE_API_KEY || !GEMINI_API_KEY) {
-      alert('YouTube API 키와 Gemini API 키를 모두 입력해주세요.');
-      return;
-    }
+    XAI_API_KEY        = (document.getElementById('xaiKeyInput') || {}).value?.trim() || XAI_API_KEY;
     try {
       await fetch('/api/config', {
         method: 'POST',
@@ -613,11 +618,34 @@
         body: JSON.stringify({ YOUTUBE_API_KEY, GEMINI_API_KEY, GEMINI_MODEL, TRANSCRIPT_API_KEY, XAI_API_KEY })
       });
     } catch (_) { /* 서버 없을 때 무시 */ }
-    const el = document.getElementById('keySaved');
+  }
+
+  function flashSaved(badgeId) {
+    const el = document.getElementById(badgeId);
+    if (!el) return;
     el.classList.remove('hidden');
-    setTimeout(() => el.classList.add('hidden'), 2500);
-    document.getElementById('apiPanelBody').classList.add('hidden');
-    document.getElementById('apiToggleIcon').textContent = '▼ 펼치기';
+    setTimeout(() => el.classList.add('hidden'), 2000);
+  }
+
+  // 각 입력칸 blur 시 자동 저장
+  [
+    ['ytKeyInput',         'ytKeySaved'],
+    ['geminiKeyInput',     'geminiKeySaved'],
+    ['geminiModelInput',   'modelSaved'],
+    ['transcriptKeyInput', 'transcriptKeySaved'],
+  ].forEach(([inputId, badgeId]) => {
+    const el = document.getElementById(inputId);
+    if (!el) return;
+    el.addEventListener('blur', async () => {
+      await persistKeys();
+      flashSaved(badgeId);
+    });
+  });
+
+  // 기존 saveKeys는 호환 유지용 (패널 접기 없이 저장만)
+  window.saveKeys = async () => {
+    await persistKeys();
+    flashSaved('keySaved');
   };
 
   // ─── 검색 ───────────────────────────────────────
