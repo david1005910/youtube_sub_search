@@ -161,23 +161,23 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception as e:
                 _send_json(self, 500, {'error': str(e)})
 
-        elif self.path == '/api/proxy/grok-image':
+        elif self.path == '/api/proxy/gemini-image':
             data = json.loads(body_raw)
-            api_key = load_env().get('XAI_API_KEY', '')
+            api_key = load_env().get('GEMINI_API_KEY', '')
             if not api_key:
-                _send_json(self, 400, {'error': 'XAI_API_KEY not set'}); return
+                _send_json(self, 400, {'error': 'GEMINI_API_KEY not set'}); return
 
+            prompt = data.get('prompt', '')
+            model  = data.get('model', 'imagen-4.0-fast-generate-001')
             req_body = json.dumps({
-                'model': data.get('model', 'grok-2-image-1212'),
-                'prompt': data.get('prompt', ''),
-                'n': 1,
-                'response_format': 'url',
+                'instances': [{'prompt': prompt}],
+                'parameters': {'sampleCount': 1},
             }).encode('utf-8')
+            url = f'https://generativelanguage.googleapis.com/v1beta/models/{model}:predict?key={api_key}'
             req = urllib.request.Request(
-                'https://api.x.ai/v1/images/generations',
+                url,
                 data=req_body,
                 headers={
-                    'Authorization': f'Bearer {api_key}',
                     'Content-Type': 'application/json',
                     'User-Agent': 'YouTubeContentTool/1.0',
                 }
