@@ -2017,7 +2017,9 @@ ${commentText}
       return;
     }
     _imageCards = cards;
+    _seqIdx = -1;
     renderGrokModal(cards);
+    document.getElementById('seqNavBar')?.classList.add('hidden');
     document.getElementById('grokModal').classList.remove('hidden');
   };
 
@@ -2032,11 +2034,16 @@ ${commentText}
   function renderGrokModal(cards) {
     document.getElementById('grokModalBody').innerHTML = `
       <div class="flex items-center justify-between mb-5 gap-3 flex-wrap">
-        <p class="text-xs text-slate-400">${cards.length}개 장면 · 프롬프트 편집 후 개별/전체 생성 가능</p>
-        <div class="flex gap-2">
+        <p class="text-xs text-slate-400">${cards.length}개 장면 · 편집 후 순차 또는 전체 생성</p>
+        <div class="flex gap-2 flex-wrap">
           <button onclick="exportAllCards()"
             class="bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-bold px-3 py-2 rounded-lg transition border border-slate-600 whitespace-nowrap">
-            📥 전체 내보내기
+            📥 내보내기
+          </button>
+          <button onclick="startSeqGeneration()"
+            class="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500
+                   text-white text-xs font-bold px-4 py-2 rounded-lg transition whitespace-nowrap">
+            ▶ 순차 생성
           </button>
           <button onclick="generateAllGrokImages()"
             class="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500
@@ -2237,6 +2244,55 @@ ${commentText}
     for (let i = 0; i < _imageCards.length; i++) {
       await generateSingleGrokImage(i);
     }
+  };
+
+  // ── 순차 생성 모드 ────────────────────────────────────
+  let _seqIdx = -1;
+
+  function scrollToCard(idx) {
+    const el = document.getElementById(`grok-card-${idx}`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function updateSeqNav(idx) {
+    const total   = _imageCards.length;
+    const card    = _imageCards[idx] || {};
+    const navBar  = document.getElementById('seqNavBar');
+    const progEl  = document.getElementById('seqProgress');
+    const titleEl = document.getElementById('seqTitle');
+    const nextBtn = document.getElementById('seqNextBtn');
+
+    navBar.classList.remove('hidden');
+    if (progEl)  progEl.textContent  = `${idx + 1} / ${total}`;
+    if (titleEl) titleEl.textContent = card.chapterTitle || `장면 ${idx + 1}`;
+
+    if (nextBtn) {
+      const isLast = idx >= total - 1;
+      nextBtn.textContent = isLast ? '✅ 완료' : `다음 장 생성 (${idx + 2}/${total}) →`;
+      nextBtn.className   = isLast
+        ? 'bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-bold px-4 py-2 rounded-lg transition whitespace-nowrap'
+        : 'bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-4 py-2 rounded-lg transition whitespace-nowrap';
+    }
+  }
+
+  window.startSeqGeneration = async () => {
+    _seqIdx = 0;
+    updateSeqNav(0);
+    await generateSingleGrokImage(0);
+    scrollToCard(0);
+  };
+
+  window.nextSeqCard = async () => {
+    if (_seqIdx >= _imageCards.length - 1) {
+      // 완료
+      document.getElementById('seqNavBar').classList.add('hidden');
+      _seqIdx = -1;
+      return;
+    }
+    _seqIdx++;
+    updateSeqNav(_seqIdx);
+    await generateSingleGrokImage(_seqIdx);
+    scrollToCard(_seqIdx);
   };
 
 </script>
@@ -2444,6 +2500,25 @@ ${commentText}
       <button onclick="closeGrokModal()" class="text-slate-400 hover:text-white text-xl leading-none ml-4">✕</button>
     </div>
     <div id="grokModalBody" class="overflow-y-auto p-6 flex-1 text-sm"></div>
+    <!-- 순차 생성 하단 네비게이션 -->
+    <div id="seqNavBar" class="hidden border-t border-slate-700 px-5 py-3 flex-shrink-0 flex items-center gap-3">
+      <div class="flex items-center gap-2 flex-1 min-w-0">
+        <span class="text-[11px] font-bold text-blue-400 bg-blue-900/40 px-2 py-0.5 rounded whitespace-nowrap">
+          장면 <span id="seqProgress">1 / 1</span>
+        </span>
+        <span id="seqTitle" class="text-xs text-slate-400 truncate"></span>
+      </div>
+      <div class="flex gap-2 flex-shrink-0">
+        <button onclick="document.getElementById('seqNavBar').classList.add('hidden'); _seqIdx=-1;"
+          class="bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs font-bold px-3 py-2 rounded-lg transition border border-slate-600">
+          ✕ 종료
+        </button>
+        <button id="seqNextBtn" onclick="nextSeqCard()"
+          class="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-4 py-2 rounded-lg transition whitespace-nowrap">
+          다음 장 생성 →
+        </button>
+      </div>
+    </div>
   </div>
 </div>
 
