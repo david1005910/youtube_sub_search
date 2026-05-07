@@ -1967,24 +1967,43 @@ ${commentText}
     initSubtitleRenderWidget();
   }
 
-  // ── 🎨 Grok 이미지 생성 ──────────────────────────────
-  let _grokPrompts = [];
+  // ── 🎨 Gemini Imagen 이미지 생성 & 편집 ──────────────────────────────
+  let _imageCards = [];
 
-  function parsePromptsFromHistory() {
-    const prompts = [];
-    // match: "AI 프롬프트 (영어): ..." — captures rest of line, then strips outer brackets
-    const regex = /AI\s*프롬프트\s*[\(（]영어[\)）]\s*[:：]\s*(.+?)(?=\n|$)/g;
+  function parseCardsFromHistory() {
+    const cards = [];
+    const seen  = new Set();
+
     sibHistory.forEach(msg => {
       if (msg.role !== 'model') return;
       const text = msg.parts[0]?.text || '';
-      let m;
-      while ((m = regex.exec(text)) !== null) {
-        // strip outer [ ] or 『 』 wrappers that AI sometimes adds
-        const p = m[1].trim().replace(/^[\[【『「]|[\]】』」]$/g, '').trim();
-        if (p && p.length > 5 && !prompts.includes(p)) prompts.push(p);
-      }
+
+      // 챕터 블록 단위로 분리
+      const blocks = text.split(/(?=📌\s*챕터)/g);
+      blocks.forEach(block => {
+        if (!block.includes('영어')) return;
+
+        const titleM  = block.match(/📌\s*챕터\s*\d+[\.．]?\s*(.+)/);
+        const cutM    = block.match(/🎥\s*컷\s*묘사\s*[:：]\s*([\s\S]+?)(?=\n🖼️|\n📹|\n📌|$)/);
+        const promptM = block.match(/AI\s*프롬프트\s*[\(（]영어[\)）]\s*[:：]\s*([\s\S]+?)(?=\n📹|\n📌|\n\n|$)/);
+        const dirM    = block.match(/📹\s*촬영[\/\/]편집\s*방향\s*[:：]\s*([\s\S]+?)(?=\n📌|\n\n|$)/);
+
+        const prompt = promptM
+          ? promptM[1].trim().replace(/^[\[【『「\s]+|[\]】』」\s]+$/g, '').trim()
+          : '';
+        if (!prompt || prompt.length < 5 || seen.has(prompt)) return;
+        seen.add(prompt);
+
+        cards.push({
+          chapterTitle:   titleM ? titleM[1].trim() : `장면 ${cards.length + 1}`,
+          cutDescription: cutM   ? cutM[1].trim()   : '',
+          prompt,
+          direction:      dirM   ? dirM[1].trim()   : '',
+          subtitles:      '',
+        });
+      });
     });
-    return prompts;
+    return cards;
   }
 
   window.openGrokModal = () => {
@@ -1992,13 +2011,13 @@ ${commentText}
       alert('Gemini API 키를 먼저 설정해주세요.\n🔑 API 키 설정 → Gemini API 키 입력 → 키 저장');
       return;
     }
-    const prompts = parsePromptsFromHistory();
-    if (!prompts.length) {
+    const cards = parseCardsFromHistory();
+    if (!cards.length) {
       alert('이미지 스크립트를 먼저 생성해주세요.\n🖼️ 버튼 → 대본으로 이미지 스크립트 생성 후 사용 가능합니다.');
       return;
     }
-    _grokPrompts = prompts;
-    renderGrokModal(prompts);
+    _imageCards = cards;
+    renderGrokModal(cards);
     document.getElementById('grokModal').classList.remove('hidden');
   };
 
@@ -2010,62 +2029,185 @@ ${commentText}
     if (e.key === 'Escape') closeGrokModal();
   });
 
-  function renderGrokModal(prompts) {
+  function renderGrokModal(cards) {
     document.getElementById('grokModalBody').innerHTML = `
-      <div class="flex items-center justify-between mb-4">
-        <p class="text-xs text-slate-400">${prompts.length}개 프롬프트 추출됨 · 순차 생성 (약 10~30초/장)</p>
-        <button onclick="generateAllGrokImages()"
-          class="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500
-                 text-white text-xs font-bold px-4 py-2 rounded-lg transition whitespace-nowrap">
-          ⚡ 전체 생성 (${prompts.length}장)
-        </button>
+      <div class="flex items-center justify-between mb-5 gap-3 flex-wrap">
+        <p class="text-xs text-slate-400">${cards.length}개 장면 · 프롬프트 편집 후 개별/전체 생성 가능</p>
+        <div class="flex gap-2">
+          <button onclick="exportAllCards()"
+            class="bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-bold px-3 py-2 rounded-lg transition border border-slate-600 whitespace-nowrap">
+            📥 전체 내보내기
+          </button>
+          <button onclick="generateAllGrokImages()"
+            class="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500
+                   text-white text-xs font-bold px-4 py-2 rounded-lg transition whitespace-nowrap">
+            ⚡ 전체 생성 (${cards.length}장)
+          </button>
+        </div>
       </div>
-      <div class="space-y-4">
-        ${prompts.map((p, i) => `
-          <div id="grok-card-${i}" class="bg-slate-900/60 border border-slate-700 rounded-xl p-4">
-            <div class="flex items-start gap-3 mb-2">
-              <span class="text-[10px] font-bold text-blue-400 bg-blue-900/40 px-1.5 py-0.5 rounded flex-shrink-0 mt-0.5">${i + 1}</span>
-              <p class="text-xs text-slate-300 flex-1 leading-relaxed font-mono break-all">${escHtml(p)}</p>
-              <button onclick="generateSingleGrokImage(${i})"
-                class="grok-gen-btn flex-shrink-0 bg-blue-700 hover:bg-blue-600 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition">
-                생성
-              </button>
+      <div class="space-y-5">
+        ${cards.map((card, i) => `
+          <div id="grok-card-${i}" class="bg-slate-900/60 border border-slate-700 rounded-xl overflow-hidden">
+
+            <!-- 카드 헤더 -->
+            <div class="flex items-center gap-2 px-4 py-2.5 bg-slate-800/70 border-b border-slate-700/60">
+              <span class="text-[10px] font-bold text-blue-400 bg-blue-900/40 px-1.5 py-0.5 rounded flex-shrink-0">${i + 1}</span>
+              <span class="text-xs font-semibold text-slate-200 flex-1 truncate">${escHtml(card.chapterTitle)}</span>
             </div>
-            <div id="grok-spin-${i}" class="hidden flex items-center gap-2 py-2">
-              <div class="spinner" style="width:18px;height:18px;border-width:2px;border-top-color:#3b82f6"></div>
-              <span class="text-xs text-blue-400">Gemini Imagen 생성 중...</span>
-            </div>
-            <div id="grok-img-${i}" class="hidden mt-2">
-              <img id="grok-img-el-${i}" class="w-full rounded-xl border border-slate-600" alt="Generated by Gemini" />
-              <div class="flex items-center gap-3 mt-2">
-                <a id="grok-dl-${i}" download="imagen-${i + 1}.png" target="_blank"
-                  class="text-xs text-blue-400 hover:text-blue-300 underline font-semibold">⬇ 다운로드</a>
+
+            <div class="p-4 space-y-4">
+              <!-- 프롬프트 편집 -->
+              <div>
+                <label class="block text-[11px] font-semibold text-blue-300 mb-1.5">🖼️ 이미지 프롬프트 (영어)</label>
+                <textarea id="img-prompt-${i}" rows="3"
+                  class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-xs text-slate-200
+                         resize-none focus:outline-none focus:border-blue-500 font-mono leading-relaxed"
+                >${escHtml(card.prompt)}</textarea>
+                <div class="flex gap-2 mt-2">
+                  <button onclick="generateSingleGrokImage(${i})"
+                    class="grok-gen-btn flex-1 bg-blue-700 hover:bg-blue-600 text-white text-xs font-bold py-1.5 rounded-lg transition">
+                    🎨 이미지 생성
+                  </button>
+                  <button onclick="(async()=>{try{await navigator.clipboard.writeText(document.getElementById('img-prompt-${i}').value);this.textContent='✅';}catch(e){} setTimeout(()=>this.textContent='📋',1500)})()"
+                    class="bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs font-bold px-3 py-1.5 rounded-lg transition border border-slate-600"
+                    title="프롬프트 복사">📋</button>
+                </div>
+              </div>
+
+              <!-- 프롬프트 검증 결과 -->
+              <div id="grok-val-${i}" class="hidden rounded-lg px-3 py-2 text-xs border"></div>
+
+              <!-- 이미지 출력 -->
+              <div id="grok-spin-${i}" class="hidden flex items-center gap-2 py-2">
+                <div class="spinner" style="width:18px;height:18px;border-width:2px;border-top-color:#3b82f6"></div>
+                <span id="grok-spin-label-${i}" class="text-xs text-blue-400">Gemini Imagen 생성 중…</span>
+              </div>
+              <div id="grok-img-${i}" class="hidden">
+                <img id="grok-img-el-${i}" class="w-full rounded-xl border border-slate-600" alt="Generated by Gemini" />
+                <div class="mt-2">
+                  <a id="grok-dl-${i}" download="imagen-${i + 1}.png" target="_blank"
+                    class="text-xs text-blue-400 hover:text-blue-300 underline font-semibold">⬇ 다운로드</a>
+                </div>
+              </div>
+              <div id="grok-err-${i}" class="hidden text-xs text-red-400 p-2 bg-red-900/20 rounded-lg"></div>
+
+              <!-- 스크립트 & 자막 편집 (기본 펼침) -->
+              <div class="border-t border-slate-700/60 pt-3">
+                <button onclick="toggleEditPanel(${i})"
+                  class="text-[11px] font-semibold text-slate-400 hover:text-slate-200 transition flex items-center gap-1.5 mb-3 w-full text-left">
+                  ✏️ 스크립트 &amp; 자막 편집
+                  <span id="edit-arrow-${i}" class="ml-auto text-[10px]">▴</span>
+                </button>
+                <div id="edit-panel-${i}" class="space-y-3">
+                  <div>
+                    <label class="block text-[11px] font-semibold text-slate-400 mb-1">🎥 컷 묘사</label>
+                    <textarea id="img-cut-${i}" rows="2"
+                      class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-xs text-slate-300
+                             resize-none focus:outline-none focus:border-slate-500"
+                      placeholder="화면에 보여줄 장면을 묘사하세요…"
+                    >${escHtml(card.cutDescription)}</textarea>
+                  </div>
+                  <div>
+                    <label class="block text-[11px] font-semibold text-slate-400 mb-1">📹 촬영/편집 방향</label>
+                    <textarea id="img-dir-${i}" rows="2"
+                      class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-xs text-slate-300
+                             resize-none focus:outline-none focus:border-slate-500"
+                      placeholder="B-roll, 텍스트 오버레이, 편집 효과 등…"
+                    >${escHtml(card.direction)}</textarea>
+                  </div>
+                  <div>
+                    <label class="block text-[11px] font-semibold text-yellow-400 mb-1">💬 자막 텍스트</label>
+                    <textarea id="img-sub-${i}" rows="2"
+                      class="w-full bg-slate-800 border border-yellow-700/40 rounded-lg px-3 py-2 text-xs text-slate-300
+                             resize-none focus:outline-none focus:border-yellow-500"
+                      placeholder="이 장면의 자막을 입력하세요…"
+                    >${escHtml(card.subtitles)}</textarea>
+                  </div>
+                </div>
               </div>
             </div>
-            <div id="grok-err-${i}" class="hidden text-xs text-red-400 mt-2 p-2 bg-red-900/20 rounded-lg"></div>
           </div>`).join('')}
       </div>`;
   }
 
+  window.toggleEditPanel = (idx) => {
+    const panel = document.getElementById(`edit-panel-${idx}`);
+    const arrow = document.getElementById(`edit-arrow-${idx}`);
+    const nowHidden = panel.classList.toggle('hidden');
+    if (arrow) arrow.textContent = nowHidden ? '▾' : '▴';
+  };
+
+  window.exportAllCards = () => {
+    const lines = [];
+    _imageCards.forEach((card, i) => {
+      const prompt = document.getElementById(`img-prompt-${i}`)?.value ?? card.prompt;
+      const cut    = document.getElementById(`img-cut-${i}`)?.value   ?? card.cutDescription;
+      const dir    = document.getElementById(`img-dir-${i}`)?.value   ?? card.direction;
+      const sub    = document.getElementById(`img-sub-${i}`)?.value   ?? card.subtitles;
+      lines.push(`${'━'.repeat(36)}`);
+      lines.push(`📌 장면 ${i + 1}. ${card.chapterTitle}`);
+      lines.push(`🖼️ AI 프롬프트 (영어): ${prompt}`);
+      if (cut.trim()) lines.push(`🎥 컷 묘사: ${cut.trim()}`);
+      if (dir.trim()) lines.push(`📹 촬영/편집 방향: ${dir.trim()}`);
+      if (sub.trim()) lines.push(`💬 자막: ${sub.trim()}`);
+      lines.push('');
+    });
+    navigator.clipboard.writeText(lines.join('\n'))
+      .then(() => alert(`✅ ${_imageCards.length}개 장면 스크립트가 클립보드에 복사되었습니다.`))
+      .catch(() => alert('복사 실패 — 브라우저 권한을 확인해주세요.'));
+  };
+
   window.generateSingleGrokImage = async (idx) => {
-    const prompt  = _grokPrompts[idx];
-    const spinEl  = document.getElementById(`grok-spin-${idx}`);
-    const imgWrap = document.getElementById(`grok-img-${idx}`);
-    const imgEl   = document.getElementById(`grok-img-el-${idx}`);
-    const dlEl    = document.getElementById(`grok-dl-${idx}`);
-    const errEl   = document.getElementById(`grok-err-${idx}`);
-    const btn     = document.querySelector(`#grok-card-${idx} .grok-gen-btn`);
+    const promptEl  = document.getElementById(`img-prompt-${idx}`);
+    const prompt    = (promptEl ? promptEl.value : '').trim() || (_imageCards[idx]?.prompt ?? '');
+    if (!prompt) return;
+
+    const cutEl    = document.getElementById(`img-cut-${idx}`);
+    const cutDesc  = cutEl ? cutEl.value.trim() : (_imageCards[idx]?.cutDescription ?? '');
+
+    const spinEl      = document.getElementById(`grok-spin-${idx}`);
+    const spinLabel   = document.getElementById(`grok-spin-label-${idx}`);
+    const imgWrap     = document.getElementById(`grok-img-${idx}`);
+    const imgEl       = document.getElementById(`grok-img-el-${idx}`);
+    const dlEl        = document.getElementById(`grok-dl-${idx}`);
+    const errEl       = document.getElementById(`grok-err-${idx}`);
+    const valEl       = document.getElementById(`grok-val-${idx}`);
+    const btn         = document.querySelector(`#grok-card-${idx} .grok-gen-btn`);
 
     imgWrap.classList.add('hidden');
     errEl.classList.add('hidden');
+    valEl.classList.add('hidden');
     spinEl.classList.remove('hidden');
-    if (btn) btn.disabled = true;
+    if (btn) { btn.disabled = true; btn.textContent = '검증 중…'; }
 
     try {
+      // ── Step 1: 프롬프트 & 장면 매칭 검증 ──
+      if (cutDesc) {
+        if (spinLabel) spinLabel.textContent = '① 프롬프트 검증 중…';
+        const valResult = await geminiChat(
+          '당신은 이미지 생성 프롬프트 품질 평가 전문가입니다. 한국어 장면 묘사와 영어 AI 이미지 프롬프트의 매칭 정도를 평가하고 딱 2줄로 답변하세요: 첫 줄은 "✅ 매칭 우수" / "⚠️ 부분 매칭" / "❌ 미스매칭" 중 하나 + 점수(1-10) + 한 줄 이유, 둘째 줄은 개선 제안 (없으면 "개선 불필요").',
+          [{ role: 'user', parts: [{ text: `장면 묘사 (한국어): ${cutDesc}\n\nAI 이미지 프롬프트 (영어): ${prompt}` }] }]
+        );
+        const isGood = valResult.includes('✅');
+        valEl.className = `rounded-lg px-3 py-2 text-xs border ${
+          isGood
+            ? 'bg-green-900/20 border-green-700/50 text-green-300'
+            : valResult.includes('⚠️')
+              ? 'bg-yellow-900/20 border-yellow-700/50 text-yellow-300'
+              : 'bg-red-900/20 border-red-700/50 text-red-300'
+        }`;
+        valEl.innerHTML = valResult.split('\n').map(l => `<p>${escHtml(l)}</p>`).join('');
+        valEl.classList.remove('hidden');
+      }
+
+      // ── Step 2: 이미지 생성 ──
+      if (spinLabel) spinLabel.textContent = '② Gemini Imagen 생성 중…';
+      if (btn) btn.textContent = '생성 중…';
+
       const res  = await fetch('/api/proxy/gemini-image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt })
+        body: JSON.stringify({ prompt }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error?.message || JSON.stringify(data).slice(0, 200));
@@ -2078,20 +2220,21 @@ ${commentText}
       if (!b64) throw new Error('이미지 데이터 없음');
       const src = `data:${mime};base64,${b64}`;
 
-      imgEl.src  = src;
-      dlEl.href  = src;
+      imgEl.src = src;
+      dlEl.href = src;
       imgWrap.classList.remove('hidden');
     } catch (e) {
       errEl.textContent = '오류: ' + e.message;
       errEl.classList.remove('hidden');
     } finally {
       spinEl.classList.add('hidden');
-      if (btn) btn.disabled = false;
+      if (spinLabel) spinLabel.textContent = 'Gemini Imagen 생성 중…';
+      if (btn) { btn.disabled = false; btn.textContent = '🎨 이미지 생성'; }
     }
   };
 
   window.generateAllGrokImages = async () => {
-    for (let i = 0; i < _grokPrompts.length; i++) {
+    for (let i = 0; i < _imageCards.length; i++) {
       await generateSingleGrokImage(i);
     }
   };
@@ -2292,11 +2435,11 @@ ${commentText}
 <!-- ── Gemini 이미지 생성 모달 ── -->
 <div id="grokModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 hidden px-4 py-6"
      onclick="if(event.target===this) closeGrokModal()">
-  <div class="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+  <div class="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col">
     <div class="flex justify-between items-center px-6 py-4 border-b border-slate-700 flex-shrink-0">
       <div>
         <h3 class="text-base font-bold text-blue-300">🎨 Gemini Imagen 이미지 생성</h3>
-        <p class="text-xs text-slate-400 mt-0.5">이미지 스크립트의 영어 AI 프롬프트 → Gemini Imagen 4로 이미지 자동 생성</p>
+        <p class="text-xs text-slate-400 mt-0.5">프롬프트 검증 → Gemini Imagen 4 생성 · 스크립트/자막 편집 · 전체 내보내기</p>
       </div>
       <button onclick="closeGrokModal()" class="text-slate-400 hover:text-white text-xl leading-none ml-4">✕</button>
     </div>
