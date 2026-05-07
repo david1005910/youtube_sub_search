@@ -250,6 +250,69 @@
     <p class="text-slate-400 text-sm">구독자 대비 조회수 비율(바이럴 비율)로 강력한 콘텐츠 소재를 발굴합니다</p>
   </div>
 
+  <!-- Gemini Gem 빠른 실행 -->
+  <div class="mb-5 rounded-xl border border-violet-800/50 overflow-hidden"
+       style="background: linear-gradient(135deg, #1e1035 0%, #0f172a 100%);">
+    <div class="flex items-center justify-between px-5 py-3 cursor-pointer border-b border-violet-800/30"
+         onclick="toggleGemPanel()">
+      <div class="flex items-center gap-2">
+        <span class="text-base">✨</span>
+        <span class="text-sm font-bold text-violet-300">Gemini Gem — AI 크리에이터 작업</span>
+      </div>
+      <span id="gemToggleIcon" class="text-slate-400 text-xs">▼ 펼치기</span>
+    </div>
+    <div id="gemPanelBody" class="hidden px-4 py-4">
+      <p class="text-xs text-slate-500 mb-3">버튼을 클릭하면 Gemini Gem에서 해당 작업을 바로 시작합니다.</p>
+      <div class="grid grid-cols-3 gap-2">
+        <a href="https://gemini.google.com/gem/31396df25b58?usp=sharing" target="_blank" rel="noopener"
+           class="gem-btn flex flex-col items-center gap-1.5 bg-slate-800 hover:bg-violet-900/50 border border-slate-700 hover:border-violet-600 rounded-xl p-3 transition text-center">
+          <span class="text-2xl">💡</span>
+          <span class="text-xs font-semibold text-slate-200">영상 아이디어</span>
+        </a>
+        <a href="https://gemini.google.com/gem/31396df25b58?usp=sharing" target="_blank" rel="noopener"
+           class="gem-btn flex flex-col items-center gap-1.5 bg-slate-800 hover:bg-violet-900/50 border border-slate-700 hover:border-violet-600 rounded-xl p-3 transition text-center">
+          <span class="text-2xl">📝</span>
+          <span class="text-xs font-semibold text-slate-200">대본 작성</span>
+        </a>
+        <a href="https://gemini.google.com/gem/31396df25b58?usp=sharing" target="_blank" rel="noopener"
+           class="gem-btn flex flex-col items-center gap-1.5 bg-slate-800 hover:bg-violet-900/50 border border-slate-700 hover:border-violet-600 rounded-xl p-3 transition text-center">
+          <span class="text-2xl">🎣</span>
+          <span class="text-xs font-semibold text-slate-200">훅 작성</span>
+        </a>
+        <a href="https://gemini.google.com/gem/31396df25b58?usp=sharing" target="_blank" rel="noopener"
+           class="gem-btn flex flex-col items-center gap-1.5 bg-slate-800 hover:bg-violet-900/50 border border-slate-700 hover:border-violet-600 rounded-xl p-3 transition text-center">
+          <span class="text-2xl">🔍</span>
+          <span class="text-xs font-semibold text-slate-200">SEO 최적화</span>
+        </a>
+        <a href="https://gemini.google.com/gem/31396df25b58?usp=sharing" target="_blank" rel="noopener"
+           class="gem-btn flex flex-col items-center gap-1.5 bg-slate-800 hover:bg-violet-900/50 border border-slate-700 hover:border-violet-600 rounded-xl p-3 transition text-center">
+          <span class="text-2xl">🖼</span>
+          <span class="text-xs font-semibold text-slate-200">썸네일 기획</span>
+        </a>
+        <a href="https://gemini.google.com/gem/31396df25b58?usp=sharing" target="_blank" rel="noopener"
+           class="gem-btn flex flex-col items-center gap-1.5 bg-slate-800 hover:bg-violet-900/50 border border-slate-700 hover:border-violet-600 rounded-xl p-3 transition text-center">
+          <span class="text-2xl">🗺</span>
+          <span class="text-xs font-semibold text-slate-200">채널 전략</span>
+        </a>
+        <a href="https://gemini.google.com/gem/31396df25b58?usp=sharing" target="_blank" rel="noopener"
+           class="gem-btn flex flex-col items-center gap-1.5 bg-slate-800 hover:bg-violet-900/50 border border-slate-700 hover:border-violet-600 rounded-xl p-3 transition text-center">
+          <span class="text-2xl">📱</span>
+          <span class="text-xs font-semibold text-slate-200">쇼츠 제작</span>
+        </a>
+        <a href="https://gemini.google.com/gem/31396df25b58?usp=sharing" target="_blank" rel="noopener"
+           class="gem-btn flex flex-col items-center gap-1.5 bg-slate-800 hover:bg-violet-900/50 border border-slate-700 hover:border-violet-600 rounded-xl p-3 transition text-center">
+          <span class="text-2xl">💰</span>
+          <span class="text-xs font-semibold text-slate-200">수익화</span>
+        </a>
+        <a href="https://gemini.google.com/gem/31396df25b58?usp=sharing" target="_blank" rel="noopener"
+           class="gem-btn flex flex-col items-center gap-1.5 bg-slate-800 hover:bg-violet-900/50 border border-slate-700 hover:border-violet-600 rounded-xl p-3 transition text-center">
+          <span class="text-2xl">🕵</span>
+          <span class="text-xs font-semibold text-slate-200">경쟁사 분석</span>
+        </a>
+      </div>
+    </div>
+  </div>
+
   <!-- 바이럴 비율 3대 핵심 요소 -->
   <div class="mb-5 rounded-xl border border-indigo-800/60 overflow-hidden"
        style="background: linear-gradient(135deg, #1e1b4b 0%, #0f172a 100%);">
@@ -479,6 +542,14 @@
 
   const YT_BASE = 'https://www.googleapis.com/youtube/v3';
   const SHORT_MAX_SEC = 180;    // 3분 기준
+
+  // ─── Gemini Gem 패널 토글 ──────────────────────
+  window.toggleGemPanel = () => {
+    const body = document.getElementById('gemPanelBody');
+    const icon = document.getElementById('gemToggleIcon');
+    const hidden = body.classList.toggle('hidden');
+    icon.textContent = hidden ? '▼ 펼치기' : '▲ 접기';
+  };
 
   // ─── 바이럴 패널 토글 ───────────────────────────
   window.toggleViralPanel = () => {
