@@ -1,0 +1,6 @@
+{
+  "__README__": "ComfyUI에서 Save (API Format) 으로 내보낸 워크플로 JSON으로 이 파일을 교체하세요.",
+  "__STEP1__": "이미지 입력 노드(LoadImage)의 image 값을 정확히 __IMAGE__ 로 바꾸세요.",
+  "__STEP2__": "텍스트 프롬프트 노드의 text 값을 정확히 __PROMPT__ 로 바꾸세요.",
+  "__PLACEHOLDER__": true
+}

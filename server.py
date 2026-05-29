@@ -4,13 +4,14 @@
 실행: python3 server.py
 접속: http://localhost:8765
 """
-import json, os, urllib.request, urllib.parse, urllib.error
+import json, os, uuid, base64, time, urllib.request, urllib.parse, urllib.error
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 
-ENV_FILE   = Path(__file__).parent / '.env'
-SKILLS_DIR = Path(__file__).parent / 'claude-youtube-main/skills/claude-youtube'
+ENV_FILE      = Path(__file__).parent / '.env'
+SKILLS_DIR    = Path(__file__).parent / 'claude-youtube-main/skills/claude-youtube'
 YT_SKILLS_DIR = Path(__file__).parent / 'youtube-skills-main/skills'
+WF_DIR        = Path(__file__).parent / 'comfyui_workflows'
 
 def load_env():
     keys = {
@@ -19,6 +20,7 @@ def load_env():
         'GEMINI_MODEL': 'gemini-2.5-flash',
         'TRANSCRIPT_API_KEY': '',
         'XAI_API_KEY': '',
+        'COMFYUI_URL': 'http://100.78.58.105:42004',
     }
     if ENV_FILE.exists():
         for line in ENV_FILE.read_text(encoding='utf-8').splitlines():
@@ -35,8 +37,67 @@ def save_env(data):
         f"GEMINI_MODEL={data.get('GEMINI_MODEL', 'gemini-2.5-flash')}\n"
         f"TRANSCRIPT_API_KEY={data.get('TRANSCRIPT_API_KEY', '')}\n"
         f"XAI_API_KEY={data.get('XAI_API_KEY', '')}\n"
+        f"COMFYUI_URL={data.get('COMFYUI_URL', 'http://100.78.58.105:42004')}\n"
     )
     ENV_FILE.write_text(content, encoding='utf-8')
+
+# ── ComfyUI 클라이언트 ──────────────────────────────────────────────────────
+
+def _comfyui_base():
+    return load_env().get('COMFYUI_URL', 'http://100.78.58.105:42004').rstrip('/')
+
+def _comfyui_req(method, path, data=None, raw=None, ctype='application/json', timeout=30):
+    url = _comfyui_base() + path
+    body = raw if raw is not None else (json.dumps(data).encode() if data is not None else None)
+    req = urllib.request.Request(url, data=body, method=method)
+    if ctype and body is not None:
+        req.add_header('Content-Type', ctype)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())
+
+def comfyui_upload_image(b64_data):
+    img_bytes = base64.b64decode(b64_data.split(',')[-1])
+    bnd = uuid.uuid4().hex
+    body = (
+        f'--{bnd}\r\nContent-Disposition: form-data; name="image"; filename="upload.png"\r\n'
+        f'Content-Type: image/png\r\n\r\n'
+    ).encode() + img_bytes + f'\r\n--{bnd}--\r\n'.encode()
+    res = _comfyui_req('POST', '/upload/image', raw=body,
+                       ctype=f'multipart/form-data; boundary={bnd}')
+    return res.get('name', 'upload.png')
+
+def comfyui_queue(workflow):
+    cid = uuid.uuid4().hex
+    res = _comfyui_req('POST', '/prompt', data={'prompt': workflow, 'client_id': cid})
+    return res.get('prompt_id')
+
+def comfyui_get_output(prompt_id):
+    """history에서 완료된 출력 파일 정보 반환. 미완료면 None."""
+    hist = _comfyui_req('GET', f'/history/{prompt_id}', timeout=10)
+    if prompt_id not in hist:
+        return None, 'pending'
+    entry = hist[prompt_id]
+    status_str = entry.get('status', {}).get('status_str', '')
+    if status_str == 'error':
+        msgs = entry.get('status', {}).get('messages', [])
+        return None, f'error:{msgs}'
+    for node_out in entry.get('outputs', {}).values():
+        for key in ('gifs', 'videos', 'images'):
+            for item in node_out.get(key, []):
+                if item.get('filename'):
+                    return item, 'done'
+    return None, 'pending'
+
+def load_workflow(name):
+    p = WF_DIR / f'{name}.json'
+    if not p.exists():
+        return None, f'워크플로 파일 없음: comfyui_workflows/{name}.json'
+    wf = json.loads(p.read_text(encoding='utf-8'))
+    if wf.get('__PLACEHOLDER__'):
+        return None, (f'comfyui_workflows/{name}.json 파일이 아직 플레이스홀더입니다. '
+                      'ComfyUI에서 Save (API Format)으로 내보낸 후 교체하고 '
+                      '__PROMPT__ / __IMAGE__ 마커를 설정하세요.')
+    return wf, None
 
 # ── claude-youtube-main 스킬 (YouTube Creator AI) ──
 def get_skill_content(skill_name):
@@ -106,6 +167,46 @@ class Handler(SimpleHTTPRequestHandler):
             if not content:
                 self.send_response(404); self.end_headers(); return
             _send_json(self, 200, {'content': content})
+
+        elif self.path.startswith('/api/comfyui/status/'):
+            prompt_id = self.path[len('/api/comfyui/status/'):]
+            try:
+                item, state = comfyui_get_output(prompt_id)
+            except Exception as e:
+                _send_json(self, 500, {'error': str(e)}); return
+            if state == 'pending':
+                _send_json(self, 200, {'status': 'pending'}); return
+            if state.startswith('error:'):
+                _send_json(self, 200, {'status': 'error', 'error': state[6:]}); return
+            fn   = urllib.parse.quote(item['filename'])
+            ftype = item.get('type', 'output')
+            _send_json(self, 200, {
+                'status': 'done',
+                'video_url': f'/api/comfyui/video/{fn}?type={ftype}',
+            })
+
+        elif self.path.startswith('/api/comfyui/video/'):
+            raw_path = self.path[len('/api/comfyui/video/'):]
+            parts    = raw_path.split('?', 1)
+            filename = urllib.parse.unquote(parts[0])
+            qs       = urllib.parse.parse_qs(parts[1]) if len(parts) > 1 else {}
+            ftype    = qs.get('type', ['output'])[0]
+            url = (f"{_comfyui_base()}/view"
+                   f"?filename={urllib.parse.quote(filename)}&type={ftype}")
+            try:
+                req = urllib.request.Request(url)
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    video_data = r.read()
+                    ctype = r.headers.get('Content-Type', 'video/mp4')
+                self.send_response(200)
+                self.send_header('Content-Type', ctype)
+                self.send_header('Content-Length', len(video_data))
+                self.send_header('Content-Disposition',
+                                 f'inline; filename="{filename}"')
+                self.end_headers()
+                self.wfile.write(video_data)
+            except Exception as e:
+                _send_json(self, 500, {'error': str(e)})
 
         else:
             super().do_GET()
@@ -197,6 +298,33 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_header('Content-Length', len(err_body))
                 self.end_headers()
                 self.wfile.write(err_body)
+            except Exception as e:
+                _send_json(self, 500, {'error': str(e)})
+
+        elif self.path == '/api/comfyui/queue':
+            data   = json.loads(body_raw)
+            mode   = data.get('mode', 't2v')       # 'i2v' | 't2v'
+            prompt = data.get('prompt', '')
+            img_b64 = data.get('image_b64', '')
+
+            wf_name = 'wan2gp_i2v' if (mode == 'i2v' and img_b64) else 'wan2gp_t2v'
+            wf, err = load_workflow(wf_name)
+            if err:
+                _send_json(self, 400, {'error': err}); return
+
+            wf_str = json.dumps(wf)
+            wf_str = wf_str.replace('"__PROMPT__"', json.dumps(prompt))
+
+            if mode == 'i2v' and img_b64:
+                try:
+                    img_name = comfyui_upload_image(img_b64)
+                except Exception as e:
+                    _send_json(self, 500, {'error': f'이미지 업로드 실패: {e}'}); return
+                wf_str = wf_str.replace('"__IMAGE__"', json.dumps(img_name))
+
+            try:
+                prompt_id = comfyui_queue(json.loads(wf_str))
+                _send_json(self, 200, {'prompt_id': prompt_id})
             except Exception as e:
                 _send_json(self, 500, {'error': str(e)})
 
