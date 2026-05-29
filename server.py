@@ -41,63 +41,121 @@ def save_env(data):
     )
     ENV_FILE.write_text(content, encoding='utf-8')
 
-# ── ComfyUI 클라이언트 ──────────────────────────────────────────────────────
+# ── Wan2GP (Gradio 5) 클라이언트 ───────────────────────────────────────────
+# Wan2GP는 Gradio 5 기반 — ComfyUI 워크플로 불필요
+# API: POST /gradio_api/call/{endpoint} → {"event_id": "..."}
+#      GET  /gradio_api/call/{endpoint}/{event_id} → SSE (data: [...])
 
-def _comfyui_base():
+# save_inputs 파라미터 인덱스 (Gradio positional args)
+_PARAM_IDX = {
+    'prompt':        5,
+    'resolution':    8,
+    'video_length':  9,
+    'seed':         13,
+    'steps':        15,
+    'guidance':     16,
+    'image_start':  39,
+    'image_end':    40,
+}
+_SAVE_INPUTS_DEFAULTS = None  # 최초 호출 시 API에서 로드
+
+def _wan_base():
     return load_env().get('COMFYUI_URL', 'http://100.78.58.105:42004').rstrip('/')
 
-def _comfyui_req(method, path, data=None, raw=None, ctype='application/json', timeout=30):
-    url = _comfyui_base() + path
-    body = raw if raw is not None else (json.dumps(data).encode() if data is not None else None)
-    req = urllib.request.Request(url, data=body, method=method)
-    if ctype and body is not None:
-        req.add_header('Content-Type', ctype)
+def _wan_call(endpoint, args, timeout=30):
+    """POST /gradio_api/call/{endpoint} → event_id"""
+    url = f'{_wan_base()}/gradio_api/call/{endpoint.lstrip("/")}'
+    body = json.dumps({'data': args}).encode()
+    req = urllib.request.Request(url, data=body, method='POST')
+    req.add_header('Content-Type', 'application/json')
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read())
+        return json.loads(r.read()).get('event_id', '')
 
-def comfyui_upload_image(b64_data):
+def _wan_read_result(endpoint, event_id, timeout=600):
+    """GET SSE stream → 최초 data 라인 파싱"""
+    url = f'{_wan_base()}/gradio_api/call/{endpoint.lstrip("/")}/{event_id}'
+    req = urllib.request.Request(url)
+    deadline = time.time() + timeout
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        for raw in r:
+            if time.time() > deadline:
+                raise TimeoutError('Wan2GP 응답 시간 초과')
+            line = raw.decode('utf-8', errors='replace').rstrip('\n\r')
+            if line.startswith('data: '):
+                payload = line[6:].strip()
+                if payload not in ('', 'null'):
+                    return json.loads(payload)
+    return None
+
+def _wan_get_defaults():
+    global _SAVE_INPUTS_DEFAULTS
+    if _SAVE_INPUTS_DEFAULTS is not None:
+        return _SAVE_INPUTS_DEFAULTS
+    url = f'{_wan_base()}/gradio_api/info'
+    req = urllib.request.Request(url)
+    with urllib.request.urlopen(req, timeout=15) as r:
+        info = json.loads(r.read())
+    params = info['named_endpoints']['/save_inputs']['parameters']
+    _SAVE_INPUTS_DEFAULTS = [p.get('parameter_default') for p in params]
+    return _SAVE_INPUTS_DEFAULTS
+
+def wan_upload_image(b64_data):
+    """base64 이미지를 Wan2GP에 업로드 → FileData dict"""
     img_bytes = base64.b64decode(b64_data.split(',')[-1])
     bnd = uuid.uuid4().hex
     body = (
-        f'--{bnd}\r\nContent-Disposition: form-data; name="image"; filename="upload.png"\r\n'
+        f'--{bnd}\r\nContent-Disposition: form-data; name="files"; filename="upload.png"\r\n'
         f'Content-Type: image/png\r\n\r\n'
     ).encode() + img_bytes + f'\r\n--{bnd}--\r\n'.encode()
-    res = _comfyui_req('POST', '/upload/image', raw=body,
-                       ctype=f'multipart/form-data; boundary={bnd}')
-    return res.get('name', 'upload.png')
+    url = f'{_wan_base()}/gradio_api/upload'
+    req = urllib.request.Request(url, data=body, method='POST')
+    req.add_header('Content-Type', f'multipart/form-data; boundary={bnd}')
+    with urllib.request.urlopen(req, timeout=30) as r:
+        paths = json.loads(r.read())  # list of server paths
+    path = paths[0] if paths else 'upload.png'
+    return {'path': path, 'meta': {'_type': 'gradio.FileData'}}
 
-def comfyui_queue(workflow):
-    cid = uuid.uuid4().hex
-    res = _comfyui_req('POST', '/prompt', data={'prompt': workflow, 'client_id': cid})
-    return res.get('prompt_id')
+def wan_queue(prompt, mode='t2v', image_b64=None,
+              resolution='832x480', video_length=97, seed=-1):
+    """save_inputs → process_prompt_and_add_tasks → event_id 반환"""
+    args = list(_wan_get_defaults())
 
-def comfyui_get_output(prompt_id):
-    """history에서 완료된 출력 파일 정보 반환. 미완료면 None."""
-    hist = _comfyui_req('GET', f'/history/{prompt_id}', timeout=10)
-    if prompt_id not in hist:
-        return None, 'pending'
-    entry = hist[prompt_id]
-    status_str = entry.get('status', {}).get('status_str', '')
-    if status_str == 'error':
-        msgs = entry.get('status', {}).get('messages', [])
-        return None, f'error:{msgs}'
-    for node_out in entry.get('outputs', {}).values():
-        for key in ('gifs', 'videos', 'images'):
-            for item in node_out.get(key, []):
-                if item.get('filename'):
-                    return item, 'done'
-    return None, 'pending'
+    args[_PARAM_IDX['prompt']]      = prompt
+    args[_PARAM_IDX['resolution']]  = resolution
+    args[_PARAM_IDX['video_length']] = video_length  # 97 ≈ 4s at 24fps
+    args[_PARAM_IDX['seed']]        = seed
 
-def load_workflow(name):
-    p = WF_DIR / f'{name}.json'
-    if not p.exists():
-        return None, f'워크플로 파일 없음: comfyui_workflows/{name}.json'
-    wf = json.loads(p.read_text(encoding='utf-8'))
-    if wf.get('__PLACEHOLDER__'):
-        return None, (f'comfyui_workflows/{name}.json 파일이 아직 플레이스홀더입니다. '
-                      'ComfyUI에서 Save (API Format)으로 내보낸 후 교체하고 '
-                      '__PROMPT__ / __IMAGE__ 마커를 설정하세요.')
-    return wf, None
+    if mode == 'i2v' and image_b64:
+        file_data = wan_upload_image(image_b64)
+        args[_PARAM_IDX['image_start']] = [file_data]
+
+    # Step 1: save_inputs (저장만, 결과 무시해도 됨)
+    eid = _wan_call('save_inputs', args, timeout=30)
+    _wan_read_result('save_inputs', eid, timeout=30)
+
+    # Step 2: process_prompt_and_add_tasks → generation event_id
+    gen_eid = _wan_call('process_prompt_and_add_tasks', [0, ''], timeout=30)
+    return gen_eid
+
+def wan_get_status(event_id):
+    """refresh_gallery 폴링 → {'status', 'video_url'?}"""
+    try:
+        eid = _wan_call('refresh_gallery', [], timeout=10)
+        result = _wan_read_result('refresh_gallery', eid, timeout=15)
+        if not result:
+            return {'status': 'pending'}
+        # result[1] = GalleryData (list of file dicts)
+        gallery = result[1] if len(result) > 1 else []
+        if gallery and isinstance(gallery, list) and gallery[0]:
+            item = gallery[0]
+            if isinstance(item, dict):
+                path = item.get('url') or item.get('name', '')
+                if path:
+                    video_url = f'/api/wan/video?path={urllib.parse.quote(path)}'
+                    return {'status': 'done', 'video_url': video_url}
+        return {'status': 'pending'}
+    except Exception as e:
+        return {'status': 'pending', 'debug': str(e)}
 
 # ── claude-youtube-main 스킬 (YouTube Creator AI) ──
 def get_skill_content(skill_name):
@@ -169,30 +227,23 @@ class Handler(SimpleHTTPRequestHandler):
             _send_json(self, 200, {'content': content})
 
         elif self.path.startswith('/api/comfyui/status/'):
-            prompt_id = self.path[len('/api/comfyui/status/'):]
+            event_id = self.path[len('/api/comfyui/status/'):]
             try:
-                item, state = comfyui_get_output(prompt_id)
+                result = wan_get_status(event_id)
+                _send_json(self, 200, result)
             except Exception as e:
-                _send_json(self, 500, {'error': str(e)}); return
-            if state == 'pending':
-                _send_json(self, 200, {'status': 'pending'}); return
-            if state.startswith('error:'):
-                _send_json(self, 200, {'status': 'error', 'error': state[6:]}); return
-            fn   = urllib.parse.quote(item['filename'])
-            ftype = item.get('type', 'output')
-            _send_json(self, 200, {
-                'status': 'done',
-                'video_url': f'/api/comfyui/video/{fn}?type={ftype}',
-            })
+                _send_json(self, 500, {'error': str(e)})
 
-        elif self.path.startswith('/api/comfyui/video/'):
-            raw_path = self.path[len('/api/comfyui/video/'):]
-            parts    = raw_path.split('?', 1)
-            filename = urllib.parse.unquote(parts[0])
-            qs       = urllib.parse.parse_qs(parts[1]) if len(parts) > 1 else {}
-            ftype    = qs.get('type', ['output'])[0]
-            url = (f"{_comfyui_base()}/view"
-                   f"?filename={urllib.parse.quote(filename)}&type={ftype}")
+        elif self.path.startswith('/api/wan/video'):
+            qs   = urllib.parse.parse_qs(self.path.split('?', 1)[-1])
+            path = qs.get('path', [''])[0]
+            if not path:
+                _send_json(self, 400, {'error': 'path 없음'}); return
+            # Wan2GP가 상대 경로를 반환하는 경우 절대 URL 구성
+            if path.startswith('/'):
+                url = f'{_wan_base()}{path}'
+            else:
+                url = path
             try:
                 req = urllib.request.Request(url)
                 with urllib.request.urlopen(req, timeout=60) as r:
@@ -201,8 +252,6 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header('Content-Type', ctype)
                 self.send_header('Content-Length', len(video_data))
-                self.send_header('Content-Disposition',
-                                 f'inline; filename="{filename}"')
                 self.end_headers()
                 self.wfile.write(video_data)
             except Exception as e:
@@ -302,29 +351,20 @@ class Handler(SimpleHTTPRequestHandler):
                 _send_json(self, 500, {'error': str(e)})
 
         elif self.path == '/api/comfyui/queue':
-            data   = json.loads(body_raw)
-            mode   = data.get('mode', 't2v')       # 'i2v' | 't2v'
-            prompt = data.get('prompt', '')
+            data    = json.loads(body_raw)
+            mode    = data.get('mode', 't2v')
+            prompt  = data.get('prompt', '')
             img_b64 = data.get('image_b64', '')
-
-            wf_name = 'wan2gp_i2v' if (mode == 'i2v' and img_b64) else 'wan2gp_t2v'
-            wf, err = load_workflow(wf_name)
-            if err:
-                _send_json(self, 400, {'error': err}); return
-
-            wf_str = json.dumps(wf)
-            wf_str = wf_str.replace('"__PROMPT__"', json.dumps(prompt))
-
-            if mode == 'i2v' and img_b64:
-                try:
-                    img_name = comfyui_upload_image(img_b64)
-                except Exception as e:
-                    _send_json(self, 500, {'error': f'이미지 업로드 실패: {e}'}); return
-                wf_str = wf_str.replace('"__IMAGE__"', json.dumps(img_name))
-
             try:
-                prompt_id = comfyui_queue(json.loads(wf_str))
-                _send_json(self, 200, {'prompt_id': prompt_id})
+                event_id = wan_queue(
+                    prompt   = prompt,
+                    mode     = mode,
+                    image_b64 = img_b64 if mode == 'i2v' else None,
+                    resolution   = data.get('resolution', '832x480'),
+                    video_length = data.get('video_length', 97),
+                    seed         = data.get('seed', -1),
+                )
+                _send_json(self, 200, {'prompt_id': event_id})
             except Exception as e:
                 _send_json(self, 500, {'error': str(e)})
 
