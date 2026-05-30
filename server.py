@@ -4,7 +4,7 @@
 실행: python3 server.py
 접속: http://localhost:8765
 """
-import json, os, uuid, base64, time, urllib.request, urllib.parse, urllib.error
+import json, os, uuid, base64, time, subprocess, tempfile, threading, urllib.request, urllib.parse, urllib.error
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 
@@ -40,6 +40,45 @@ def save_env(data):
         f"COMFYUI_URL={data.get('COMFYUI_URL', 'http://100.78.58.105:42004')}\n"
     )
     ENV_FILE.write_text(content, encoding='utf-8')
+
+# ── SSH / 파일 감시 ─────────────────────────────────────────────────────────
+SSH_HOST    = 'sharkey@100.78.58.105'
+SSH_OUTDIR  = r'C:\pinokio\api\wan.git\app\outputs'
+SSH_OPTS    = ['-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=10']
+
+def _ssh(cmd, timeout=20):
+    r = subprocess.run(['ssh'] + SSH_OPTS + [SSH_HOST, cmd],
+                       capture_output=True, text=True, timeout=timeout)
+    return r.stdout.strip()
+
+def ssh_latest_video():
+    """출력 디렉토리에서 가장 최근 mp4 파일명 반환"""
+    ps = (f'powershell -Command "'
+          f'Get-ChildItem \'{SSH_OUTDIR}\' -Filter *.mp4 '
+          f'| Sort-Object LastWriteTime -Descending '
+          f'| Select-Object -First 1 -ExpandProperty FullName"')
+    return _ssh(ps, timeout=15)
+
+def ssh_videos_after(since_ts):
+    """since_ts(epoch) 이후 생성된 mp4 목록 반환"""
+    dt = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(since_ts))
+    ps = (f'powershell -Command "'
+          f'Get-ChildItem \'{SSH_OUTDIR}\' -Filter *.mp4 '
+          f'| Where-Object {{ $_.LastWriteTime -gt \'{dt}\' }} '
+          f'| Sort-Object LastWriteTime -Descending '
+          f'| Select-Object -First 1 -ExpandProperty FullName"')
+    return _ssh(ps, timeout=15)
+
+def ssh_download_video(remote_win_path):
+    """SCP로 로컬 임시파일에 다운로드 → 경로 반환"""
+    local = tempfile.mktemp(suffix='.mp4', dir='/tmp')
+    # Windows 경로 → SCP 형식
+    remote_scp = remote_win_path.replace('\\', '/').replace('C:/', '/c/')
+    subprocess.run(
+        ['scp'] + SSH_OPTS + [f'{SSH_HOST}:{remote_scp}', local],
+        check=True, timeout=120
+    )
+    return local
 
 # ── Wan2GP (Gradio 5) 클라이언트 ───────────────────────────────────────────
 # Wan2GP는 Gradio 5 기반 — ComfyUI 워크플로 불필요
@@ -117,43 +156,102 @@ def wan_upload_image(b64_data):
 
 def wan_queue(prompt, mode='t2v', image_b64=None,
               resolution='832x480', video_length=97, seed=-1):
-    """save_inputs → process_prompt_and_add_tasks → event_id 반환"""
-    args = list(_wan_get_defaults())
+    """생성 요청 → job_id(시작 타임스탬프) 반환"""
+    with urllib.request.urlopen(f'{_wan_base()}/config', timeout=10) as r:
+        cfg = json.loads(r.read())
+    deps = cfg['dependencies']
+    session = uuid.uuid4().hex[:12]
 
-    args[_PARAM_IDX['prompt']]      = prompt
-    args[_PARAM_IDX['resolution']]  = resolution
-    args[_PARAM_IDX['video_length']] = video_length  # 97 ≈ 4s at 24fps
-    args[_PARAM_IDX['seed']]        = seed
+    def qj(fn_index, data):
+        body = json.dumps({'data': data, 'fn_index': fn_index,
+                           'session_hash': session}).encode()
+        req = urllib.request.Request(f'{_wan_base()}/gradio_api/queue/join', data=body)
+        req.add_header('Content-Type', 'application/json')
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read())
+
+    def rq(timeout=20):
+        url = f'{_wan_base()}/gradio_api/queue/data?session_hash={session}'
+        req = urllib.request.Request(url)
+        deadline = time.time() + timeout
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            for raw in r:
+                if time.time() > deadline: break
+                line = raw.decode('utf-8', errors='replace').strip()
+                if line.startswith('data:'):
+                    try:
+                        d = json.loads(line[5:])
+                        if d.get('msg') == 'process_completed':
+                            return d.get('output', {})
+                    except: pass
+        return None
+
+    args = list(_wan_get_defaults())
+    args[_PARAM_IDX['prompt']]       = prompt
+    args[_PARAM_IDX['resolution']]   = resolution
+    args[_PARAM_IDX['video_length']] = video_length
+    args[_PARAM_IDX['seed']]         = seed
 
     if mode == 'i2v' and image_b64:
         file_data = wan_upload_image(image_b64)
         args[_PARAM_IDX['image_start']] = [file_data]
 
-    # Step 1: save_inputs (저장만, 결과 무시해도 됨)
-    eid = _wan_call('save_inputs', args, timeout=30)
-    _wan_read_result('save_inputs', eid, timeout=30)
+    fn_save      = next(i for i,d in enumerate(deps) if d.get('api_name')=='save_inputs')
+    fn_process   = next(i for i,d in enumerate(deps) if d.get('api_name')=='process_prompt_and_add_tasks')
+    fn_activate  = next(i for i,d in enumerate(deps) if d.get('api_name')=='activate_status')
+    fn_tasks     = next(i for i,d in enumerate(deps) if d.get('api_name')=='process_tasks')
 
-    # Step 2: process_prompt_and_add_tasks → generation event_id
-    gen_eid = _wan_call('process_prompt_and_add_tasks', [0, ''], timeout=30)
-    return gen_eid
+    # process_prompt_and_add_tasks 기본값에서 model_choice 가져오기
+    with urllib.request.urlopen(f'{_wan_base()}/gradio_api/info', timeout=10) as r:
+        info = json.loads(r.read())
+    pp_params = info['named_endpoints']['/process_prompt_and_add_tasks']['parameters']
+    model_choice = next(
+        (p['parameter_default'] for p in pp_params if p['parameter_name']=='model_choice'),
+        'ltx2_22B_distilled_gguf_q4_k_m'
+    )
 
-def wan_get_status(event_id):
-    """refresh_gallery 폴링 → {'status', 'video_url'?}"""
+    start_ts = time.time()
+    qj(fn_save, args);                     rq(timeout=20)
+    qj(fn_process, [0, model_choice]);     rq(timeout=20)
+    qj(fn_activate, []);                   rq(timeout=20)
+
+    # process_tasks: SSE 연결을 끊으면 생성이 멈추므로 백그라운드 스레드로 유지
+    def _hold_process_tasks():
+        try:
+            qj(fn_tasks, [])
+            url = f'{_wan_base()}/gradio_api/queue/data?session_hash={session}'
+            req = urllib.request.Request(url)
+            deadline = time.time() + 900  # 최대 15분
+            with urllib.request.urlopen(req, timeout=920) as r:
+                for raw in r:
+                    if time.time() > deadline: break
+                    line = raw.decode('utf-8', errors='replace').strip()
+                    if line.startswith('data:'):
+                        try:
+                            d = json.loads(line[5:])
+                            if d.get('msg') == 'process_completed':
+                                break
+                        except: pass
+        except: pass
+
+    t = threading.Thread(target=_hold_process_tasks, daemon=True)
+    t.start()
+
+    return str(int(start_ts))  # job_id = 시작 시간(epoch)
+
+def wan_get_status(job_id):
+    """SSH로 출력 디렉토리 감시 → {'status', 'video_url'?}"""
     try:
-        eid = _wan_call('refresh_gallery', [], timeout=10)
-        result = _wan_read_result('refresh_gallery', eid, timeout=15)
-        if not result:
+        since_ts = int(job_id)
+    except ValueError:
+        return {'status': 'error', 'error': '잘못된 job_id'}
+    try:
+        path = ssh_videos_after(since_ts)
+        if not path:
             return {'status': 'pending'}
-        # result[1] = GalleryData (list of file dicts)
-        gallery = result[1] if len(result) > 1 else []
-        if gallery and isinstance(gallery, list) and gallery[0]:
-            item = gallery[0]
-            if isinstance(item, dict):
-                path = item.get('url') or item.get('name', '')
-                if path:
-                    video_url = f'/api/wan/video?path={urllib.parse.quote(path)}'
-                    return {'status': 'done', 'video_url': video_url}
-        return {'status': 'pending'}
+        local = ssh_download_video(path)
+        video_url = f'/api/wan/video?local={urllib.parse.quote(local)}'
+        return {'status': 'done', 'video_url': video_url}
     except Exception as e:
         return {'status': 'pending', 'debug': str(e)}
 
@@ -235,23 +333,17 @@ class Handler(SimpleHTTPRequestHandler):
                 _send_json(self, 500, {'error': str(e)})
 
         elif self.path.startswith('/api/wan/video'):
-            qs   = urllib.parse.parse_qs(self.path.split('?', 1)[-1])
-            path = qs.get('path', [''])[0]
-            if not path:
-                _send_json(self, 400, {'error': 'path 없음'}); return
-            # Wan2GP가 상대 경로를 반환하는 경우 절대 URL 구성
-            if path.startswith('/'):
-                url = f'{_wan_base()}{path}'
-            else:
-                url = path
+            qs    = urllib.parse.parse_qs(self.path.split('?', 1)[-1])
+            local = qs.get('local', [''])[0]
+            if not local or not Path(local).exists():
+                _send_json(self, 404, {'error': '영상 파일 없음'}); return
             try:
-                req = urllib.request.Request(url)
-                with urllib.request.urlopen(req, timeout=60) as r:
-                    video_data = r.read()
-                    ctype = r.headers.get('Content-Type', 'video/mp4')
+                video_data = Path(local).read_bytes()
                 self.send_response(200)
-                self.send_header('Content-Type', ctype)
+                self.send_header('Content-Type', 'video/mp4')
                 self.send_header('Content-Length', len(video_data))
+                self.send_header('Content-Disposition',
+                                 f'inline; filename="{Path(local).name}"')
                 self.end_headers()
                 self.wfile.write(video_data)
             except Exception as e:
