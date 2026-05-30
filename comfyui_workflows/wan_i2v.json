@@ -1,0 +1,32 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "__IMAGE_FILENAME__",
+      "upload": "image"
+    }
+  },
+  "2": {
+    "class_type": "WanImageToVideoApi",
+    "inputs": {
+      "model": "wan2.6-i2v",
+      "image": ["1", 0],
+      "prompt": "__PROMPT__",
+      "negative_prompt": "",
+      "resolution": "720P",
+      "duration": 5,
+      "seed": -1,
+      "prompt_extend": true,
+      "watermark": false
+    }
+  },
+  "3": {
+    "class_type": "SaveVideo",
+    "inputs": {
+      "video": ["2", 0],
+      "filename_prefix": "wan_i2v",
+      "format": "mp4",
+      "codec": "h264"
+    }
+  }
+}

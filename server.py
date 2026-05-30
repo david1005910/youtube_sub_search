@@ -20,7 +20,7 @@ def load_env():
         'GEMINI_MODEL': 'gemini-2.5-flash',
         'TRANSCRIPT_API_KEY': '',
         'XAI_API_KEY': '',
-        'COMFYUI_URL': 'http://100.78.58.105:42004',
+        'COMFYUI_URL': 'http://100.78.58.105:8000',
     }
     if ENV_FILE.exists():
         for line in ENV_FILE.read_text(encoding='utf-8').splitlines():
@@ -37,223 +37,88 @@ def save_env(data):
         f"GEMINI_MODEL={data.get('GEMINI_MODEL', 'gemini-2.5-flash')}\n"
         f"TRANSCRIPT_API_KEY={data.get('TRANSCRIPT_API_KEY', '')}\n"
         f"XAI_API_KEY={data.get('XAI_API_KEY', '')}\n"
-        f"COMFYUI_URL={data.get('COMFYUI_URL', 'http://100.78.58.105:42004')}\n"
+        f"COMFYUI_URL={data.get('COMFYUI_URL', 'http://100.78.58.105:8000')}\n"
     )
     ENV_FILE.write_text(content, encoding='utf-8')
 
-# ── SSH / 파일 감시 ─────────────────────────────────────────────────────────
-SSH_HOST    = 'sharkey@100.78.58.105'
-SSH_OUTDIR  = r'C:\pinokio\api\wan.git\app\outputs'
-SSH_OPTS    = ['-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=10']
+# ── ComfyUI REST API 클라이언트 ─────────────────────────────────────────────
 
-def _ssh(cmd, timeout=20):
-    r = subprocess.run(['ssh'] + SSH_OPTS + [SSH_HOST, cmd],
-                       capture_output=True, text=True, timeout=timeout)
-    return r.stdout.strip()
+def _comfyui_base():
+    return load_env().get('COMFYUI_URL', 'http://100.78.58.105:8000').rstrip('/')
 
-def ssh_latest_video():
-    """출력 디렉토리에서 가장 최근 mp4 파일명 반환"""
-    ps = (f'powershell -Command "'
-          f'Get-ChildItem \'{SSH_OUTDIR}\' -Filter *.mp4 '
-          f'| Sort-Object LastWriteTime -Descending '
-          f'| Select-Object -First 1 -ExpandProperty FullName"')
-    return _ssh(ps, timeout=15)
-
-def ssh_videos_after(since_ts):
-    """since_ts(epoch) 이후 생성된 mp4 목록 반환"""
-    dt = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(since_ts))
-    ps = (f'powershell -Command "'
-          f'Get-ChildItem \'{SSH_OUTDIR}\' -Filter *.mp4 '
-          f'| Where-Object {{ $_.LastWriteTime -gt \'{dt}\' }} '
-          f'| Sort-Object LastWriteTime -Descending '
-          f'| Select-Object -First 1 -ExpandProperty FullName"')
-    return _ssh(ps, timeout=15)
-
-def ssh_download_video(remote_win_path):
-    """SCP로 로컬 임시파일에 다운로드 → 경로 반환"""
-    local = tempfile.mktemp(suffix='.mp4', dir='/tmp')
-    # Windows 경로 → SCP 형식
-    remote_scp = remote_win_path.replace('\\', '/').replace('C:/', '/c/')
-    subprocess.run(
-        ['scp'] + SSH_OPTS + [f'{SSH_HOST}:{remote_scp}', local],
-        check=True, timeout=120
-    )
-    return local
-
-# ── Wan2GP (Gradio 5) 클라이언트 ───────────────────────────────────────────
-# Wan2GP는 Gradio 5 기반 — ComfyUI 워크플로 불필요
-# API: POST /gradio_api/call/{endpoint} → {"event_id": "..."}
-#      GET  /gradio_api/call/{endpoint}/{event_id} → SSE (data: [...])
-
-# save_inputs 파라미터 인덱스 (Gradio positional args)
-_PARAM_IDX = {
-    'prompt':        5,
-    'resolution':    8,
-    'video_length':  9,
-    'seed':         13,
-    'steps':        15,
-    'guidance':     16,
-    'image_start':  39,
-    'image_end':    40,
-}
-_SAVE_INPUTS_DEFAULTS = None  # 최초 호출 시 API에서 로드
-
-def _wan_base():
-    return load_env().get('COMFYUI_URL', 'http://100.78.58.105:42004').rstrip('/')
-
-def _wan_call(endpoint, args, timeout=30):
-    """POST /gradio_api/call/{endpoint} → event_id"""
-    url = f'{_wan_base()}/gradio_api/call/{endpoint.lstrip("/")}'
-    body = json.dumps({'data': args}).encode()
-    req = urllib.request.Request(url, data=body, method='POST')
-    req.add_header('Content-Type', 'application/json')
+def _comfyui_req(method, path, data=None, raw=None, ctype='application/json', timeout=30):
+    url = _comfyui_base() + path
+    body = raw if raw is not None else (json.dumps(data).encode() if data is not None else None)
+    req = urllib.request.Request(url, data=body, method=method)
+    if ctype and body is not None:
+        req.add_header('Content-Type', ctype)
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read()).get('event_id', '')
+        return json.loads(r.read())
 
-def _wan_read_result(endpoint, event_id, timeout=600):
-    """GET SSE stream → 최초 data 라인 파싱"""
-    url = f'{_wan_base()}/gradio_api/call/{endpoint.lstrip("/")}/{event_id}'
-    req = urllib.request.Request(url)
-    deadline = time.time() + timeout
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        for raw in r:
-            if time.time() > deadline:
-                raise TimeoutError('Wan2GP 응답 시간 초과')
-            line = raw.decode('utf-8', errors='replace').rstrip('\n\r')
-            if line.startswith('data: '):
-                payload = line[6:].strip()
-                if payload not in ('', 'null'):
-                    return json.loads(payload)
-    return None
-
-def _wan_get_defaults():
-    global _SAVE_INPUTS_DEFAULTS
-    if _SAVE_INPUTS_DEFAULTS is not None:
-        return _SAVE_INPUTS_DEFAULTS
-    url = f'{_wan_base()}/gradio_api/info'
-    req = urllib.request.Request(url)
-    with urllib.request.urlopen(req, timeout=15) as r:
-        info = json.loads(r.read())
-    params = info['named_endpoints']['/save_inputs']['parameters']
-    _SAVE_INPUTS_DEFAULTS = [p.get('parameter_default') for p in params]
-    return _SAVE_INPUTS_DEFAULTS
-
-def wan_upload_image(b64_data):
-    """base64 이미지를 Wan2GP에 업로드 → FileData dict"""
+def comfyui_upload_image(b64_data):
+    """base64 이미지를 ComfyUI에 업로드 → 파일명 반환"""
     img_bytes = base64.b64decode(b64_data.split(',')[-1])
     bnd = uuid.uuid4().hex
     body = (
-        f'--{bnd}\r\nContent-Disposition: form-data; name="files"; filename="upload.png"\r\n'
+        f'--{bnd}\r\nContent-Disposition: form-data; name="image"; filename="upload.png"\r\n'
         f'Content-Type: image/png\r\n\r\n'
     ).encode() + img_bytes + f'\r\n--{bnd}--\r\n'.encode()
-    url = f'{_wan_base()}/gradio_api/upload'
-    req = urllib.request.Request(url, data=body, method='POST')
-    req.add_header('Content-Type', f'multipart/form-data; boundary={bnd}')
-    with urllib.request.urlopen(req, timeout=30) as r:
-        paths = json.loads(r.read())  # list of server paths
-    path = paths[0] if paths else 'upload.png'
-    return {'path': path, 'meta': {'_type': 'gradio.FileData'}}
+    res = _comfyui_req('POST', '/upload/image', raw=body,
+                       ctype=f'multipart/form-data; boundary={bnd}')
+    return res.get('name', 'upload.png')
 
-def wan_queue(prompt, mode='t2v', image_b64=None,
-              resolution='832x480', video_length=97, seed=-1):
-    """생성 요청 → job_id(시작 타임스탬프) 반환"""
-    with urllib.request.urlopen(f'{_wan_base()}/config', timeout=10) as r:
-        cfg = json.loads(r.read())
-    deps = cfg['dependencies']
-    session = uuid.uuid4().hex[:12]
+def comfyui_queue(workflow):
+    """워크플로 제출 → prompt_id 반환"""
+    cid = uuid.uuid4().hex
+    res = _comfyui_req('POST', '/prompt', data={'prompt': workflow, 'client_id': cid})
+    return res.get('prompt_id')
 
-    def qj(fn_index, data):
-        body = json.dumps({'data': data, 'fn_index': fn_index,
-                           'session_hash': session}).encode()
-        req = urllib.request.Request(f'{_wan_base()}/gradio_api/queue/join', data=body)
-        req.add_header('Content-Type', 'application/json')
-        with urllib.request.urlopen(req, timeout=15) as r:
-            return json.loads(r.read())
+def comfyui_get_output(prompt_id):
+    """history에서 완료된 출력 파일 정보 반환. 미완료/오류는 (None, state) 반환"""
+    hist = _comfyui_req('GET', f'/history/{prompt_id}', timeout=10)
+    if prompt_id not in hist:
+        return None, 'pending'
+    entry = hist[prompt_id]
+    status_str = entry.get('status', {}).get('status_str', '')
+    if status_str == 'error':
+        msgs = entry.get('status', {}).get('messages', [])
+        return None, f'error:{msgs}'
+    for node_out in entry.get('outputs', {}).values():
+        for key in ('gifs', 'videos', 'images'):
+            for item in node_out.get(key, []):
+                if item.get('filename'):
+                    return item, 'done'
+    return None, 'pending'
 
-    def rq(timeout=20):
-        url = f'{_wan_base()}/gradio_api/queue/data?session_hash={session}'
-        req = urllib.request.Request(url)
-        deadline = time.time() + timeout
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            for raw in r:
-                if time.time() > deadline: break
-                line = raw.decode('utf-8', errors='replace').strip()
-                if line.startswith('data:'):
-                    try:
-                        d = json.loads(line[5:])
-                        if d.get('msg') == 'process_completed':
-                            return d.get('output', {})
-                    except: pass
-        return None
-
-    args = list(_wan_get_defaults())
-    args[_PARAM_IDX['prompt']]       = prompt
-    args[_PARAM_IDX['resolution']]   = resolution
-    args[_PARAM_IDX['video_length']] = video_length
-    args[_PARAM_IDX['seed']]         = seed
-
+def wan_queue(prompt, mode='t2v', image_b64=None, seed=-1):
+    """ComfyUI 워크플로 제출 → prompt_id 반환"""
+    import random
+    actual_seed = seed if seed >= 0 else random.randint(0, 2147483647)
+    wf_file = WF_DIR / ('wan_i2v.json' if (mode == 'i2v' and image_b64) else 'wan_t2v.json')
+    wf = json.loads(wf_file.read_text(encoding='utf-8'))
+    wf_str = json.dumps(wf)
+    wf_str = wf_str.replace('"__PROMPT__"', json.dumps(prompt))
+    wf_str = wf_str.replace('-1', str(actual_seed))
     if mode == 'i2v' and image_b64:
-        file_data = wan_upload_image(image_b64)
-        args[_PARAM_IDX['image_start']] = [file_data]
+        img_name = comfyui_upload_image(image_b64)
+        wf_str = wf_str.replace('"__IMAGE_FILENAME__"', json.dumps(img_name))
+    return comfyui_queue(json.loads(wf_str))
 
-    fn_save      = next(i for i,d in enumerate(deps) if d.get('api_name')=='save_inputs')
-    fn_process   = next(i for i,d in enumerate(deps) if d.get('api_name')=='process_prompt_and_add_tasks')
-    fn_activate  = next(i for i,d in enumerate(deps) if d.get('api_name')=='activate_status')
-    fn_tasks     = next(i for i,d in enumerate(deps) if d.get('api_name')=='process_tasks')
-
-    # process_prompt_and_add_tasks 기본값에서 model_choice 가져오기
-    with urllib.request.urlopen(f'{_wan_base()}/gradio_api/info', timeout=10) as r:
-        info = json.loads(r.read())
-    pp_params = info['named_endpoints']['/process_prompt_and_add_tasks']['parameters']
-    model_choice = next(
-        (p['parameter_default'] for p in pp_params if p['parameter_name']=='model_choice'),
-        'ltx2_22B_distilled_gguf_q4_k_m'
-    )
-
-    start_ts = time.time()
-    qj(fn_save, args);                     rq(timeout=20)
-    qj(fn_process, [0, model_choice]);     rq(timeout=20)
-    qj(fn_activate, []);                   rq(timeout=20)
-
-    # process_tasks: SSE 연결을 끊으면 생성이 멈추므로 백그라운드 스레드로 유지
-    def _hold_process_tasks():
-        try:
-            qj(fn_tasks, [])
-            url = f'{_wan_base()}/gradio_api/queue/data?session_hash={session}'
-            req = urllib.request.Request(url)
-            deadline = time.time() + 900  # 최대 15분
-            with urllib.request.urlopen(req, timeout=920) as r:
-                for raw in r:
-                    if time.time() > deadline: break
-                    line = raw.decode('utf-8', errors='replace').strip()
-                    if line.startswith('data:'):
-                        try:
-                            d = json.loads(line[5:])
-                            if d.get('msg') == 'process_completed':
-                                break
-                        except: pass
-        except: pass
-
-    t = threading.Thread(target=_hold_process_tasks, daemon=True)
-    t.start()
-
-    return str(int(start_ts))  # job_id = 시작 시간(epoch)
-
-def wan_get_status(job_id):
-    """SSH로 출력 디렉토리 감시 → {'status', 'video_url'?}"""
+def wan_get_status(prompt_id):
+    """ComfyUI history 폴링 → {'status', 'video_url'?}"""
     try:
-        since_ts = int(job_id)
-    except ValueError:
-        return {'status': 'error', 'error': '잘못된 job_id'}
-    try:
-        path = ssh_videos_after(since_ts)
-        if not path:
-            return {'status': 'pending'}
-        local = ssh_download_video(path)
-        video_url = f'/api/wan/video?local={urllib.parse.quote(local)}'
-        return {'status': 'done', 'video_url': video_url}
+        item, state = comfyui_get_output(prompt_id)
     except Exception as e:
         return {'status': 'pending', 'debug': str(e)}
+    if state == 'pending':
+        return {'status': 'pending'}
+    if state.startswith('error:'):
+        return {'status': 'error', 'error': state[6:]}
+    fn   = urllib.parse.quote(item['filename'])
+    ftype = item.get('type', 'output')
+    subfolder = item.get('subfolder', '')
+    url = f'/api/wan/video?filename={fn}&type={ftype}&subfolder={urllib.parse.quote(subfolder)}'
+    return {'status': 'done', 'video_url': url}
 
 # ── claude-youtube-main 스킬 (YouTube Creator AI) ──
 def get_skill_content(skill_name):
@@ -325,25 +190,34 @@ class Handler(SimpleHTTPRequestHandler):
             _send_json(self, 200, {'content': content})
 
         elif self.path.startswith('/api/comfyui/status/'):
-            event_id = self.path[len('/api/comfyui/status/'):]
+            prompt_id = self.path[len('/api/comfyui/status/'):]
             try:
-                result = wan_get_status(event_id)
+                result = wan_get_status(prompt_id)
                 _send_json(self, 200, result)
             except Exception as e:
                 _send_json(self, 500, {'error': str(e)})
 
         elif self.path.startswith('/api/wan/video'):
-            qs    = urllib.parse.parse_qs(self.path.split('?', 1)[-1])
-            local = qs.get('local', [''])[0]
-            if not local or not Path(local).exists():
-                _send_json(self, 404, {'error': '영상 파일 없음'}); return
+            qs        = urllib.parse.parse_qs(self.path.split('?', 1)[-1])
+            filename  = qs.get('filename', [''])[0]
+            ftype     = qs.get('type', ['output'])[0]
+            subfolder = qs.get('subfolder', [''])[0]
+            if not filename:
+                _send_json(self, 400, {'error': 'filename 없음'}); return
+            comfy_url = (f"{_comfyui_base()}/view"
+                         f"?filename={urllib.parse.quote(filename)}"
+                         f"&type={ftype}"
+                         f"&subfolder={urllib.parse.quote(subfolder)}")
             try:
-                video_data = Path(local).read_bytes()
+                req = urllib.request.Request(comfy_url)
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    video_data = r.read()
+                    ctype = r.headers.get('Content-Type', 'video/mp4')
                 self.send_response(200)
-                self.send_header('Content-Type', 'video/mp4')
+                self.send_header('Content-Type', ctype)
                 self.send_header('Content-Length', len(video_data))
                 self.send_header('Content-Disposition',
-                                 f'inline; filename="{Path(local).name}"')
+                                 f'inline; filename="{filename}"')
                 self.end_headers()
                 self.wfile.write(video_data)
             except Exception as e:
@@ -448,15 +322,13 @@ class Handler(SimpleHTTPRequestHandler):
             prompt  = data.get('prompt', '')
             img_b64 = data.get('image_b64', '')
             try:
-                event_id = wan_queue(
-                    prompt   = prompt,
-                    mode     = mode,
+                prompt_id = wan_queue(
+                    prompt    = prompt,
+                    mode      = mode,
                     image_b64 = img_b64 if mode == 'i2v' else None,
-                    resolution   = data.get('resolution', '832x480'),
-                    video_length = data.get('video_length', 97),
-                    seed         = data.get('seed', -1),
+                    seed      = data.get('seed', -1),
                 )
-                _send_json(self, 200, {'prompt_id': event_id})
+                _send_json(self, 200, {'prompt_id': prompt_id})
             except Exception as e:
                 _send_json(self, 500, {'error': str(e)})
 

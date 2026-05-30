@@ -2124,12 +2124,26 @@ ${commentText}
                 <div class="mt-2 flex items-center gap-3 flex-wrap">
                   <a id="grok-dl-${i}" download="imagen-${i + 1}.png" target="_blank"
                     class="text-xs text-blue-400 hover:text-blue-300 underline font-semibold">⬇ 이미지 다운로드</a>
-                  <button onclick="openWan2GP(${i})"
+                  <button id="wan-i2v-btn-${i}" onclick="generateWanVideo(${i},'i2v')"
                     class="text-xs bg-purple-700 hover:bg-purple-600 text-white font-bold px-2.5 py-1 rounded-lg transition">
-                    🎬 Wan2GP로 영상 생성
+                    🎬 이미지→영상
+                  </button>
+                  <button id="wan-t2v-btn-${i}" onclick="generateWanVideo(${i},'t2v')"
+                    class="text-xs bg-violet-700 hover:bg-violet-600 text-white font-bold px-2.5 py-1 rounded-lg transition">
+                    📝 텍스트→영상
                   </button>
                 </div>
-                <div id="wan-notice-${i}" class="hidden mt-2 text-xs text-purple-300 bg-purple-900/20 border border-purple-700/40 rounded-lg px-3 py-2"></div>
+                <div id="wan-status-${i}" class="hidden mt-2 flex items-center gap-2">
+                  <div class="spinner" style="width:14px;height:14px;border-width:2px;border-top-color:#a855f7"></div>
+                  <span id="wan-status-text-${i}" class="text-xs text-purple-300"></span>
+                </div>
+                <div id="wan-video-${i}" class="hidden mt-2">
+                  <video id="wan-video-el-${i}" controls class="w-full rounded-xl border border-purple-600/50"></video>
+                  <div class="mt-1.5">
+                    <a id="wan-dl-${i}" download class="text-xs text-purple-400 hover:text-purple-300 underline font-semibold">⬇ 영상 다운로드</a>
+                  </div>
+                </div>
+                <div id="wan-err-${i}" class="hidden mt-2 text-xs text-red-400 p-2 bg-red-900/20 rounded-lg"></div>
               </div>
               <div id="grok-err-${i}" class="hidden text-xs text-red-400 p-2 bg-red-900/20 rounded-lg"></div>
 
@@ -2330,33 +2344,69 @@ ${commentText}
     scrollToCard(_seqIdx);
   };
 
-  // ── Wan2GP 영상 생성 (새 탭 열기 + 프롬프트 복사) ───
-  const WAN2GP_URL = 'http://100.78.58.105:42004';
+  // ── Wan2GP → ComfyUI 영상 자동 생성 ─────────────────
+  window.generateWanVideo = async (idx, mode) => {
+    const imgEl     = document.getElementById(`grok-img-el-${idx}`);
+    const prompt    = document.getElementById(`img-prompt-${idx}`)?.value?.trim() || '';
+    const statusDiv = document.getElementById(`wan-status-${idx}`);
+    const statusTxt = document.getElementById(`wan-status-text-${idx}`);
+    const videoWrap = document.getElementById(`wan-video-${idx}`);
+    const videoEl   = document.getElementById(`wan-video-el-${idx}`);
+    const dlEl      = document.getElementById(`wan-dl-${idx}`);
+    const errEl     = document.getElementById(`wan-err-${idx}`);
+    const i2vBtn    = document.getElementById(`wan-i2v-btn-${idx}`);
+    const t2vBtn    = document.getElementById(`wan-t2v-btn-${idx}`);
 
-  window.openWan2GP = async (idx) => {
-    const prompt  = document.getElementById(`img-prompt-${idx}`)?.value?.trim() || '';
-    const imgEl   = document.getElementById(`grok-img-el-${idx}`);
-    const notice  = document.getElementById(`wan-notice-${idx}`);
+    if (mode === 'i2v' && (!imgEl?.src || imgEl.src === window.location.href)) {
+      alert('먼저 이미지를 생성해주세요.'); return;
+    }
+    if (!prompt) { alert('프롬프트가 비어있습니다.'); return; }
 
-    // 프롬프트 클립보드 복사
-    try { await navigator.clipboard.writeText(prompt); } catch (_) {}
+    errEl.classList.add('hidden');
+    videoWrap.classList.add('hidden');
+    statusDiv.classList.remove('hidden');
+    if (i2vBtn) i2vBtn.disabled = true;
+    if (t2vBtn) t2vBtn.disabled = true;
+    statusTxt.textContent = '⏳ ComfyUI에 전송 중…';
 
-    // 이미지가 있으면 다운로드 유도
-    const hasImage = imgEl?.src && imgEl.src !== window.location.href;
+    try {
+      const body = { mode, prompt };
+      if (mode === 'i2v') body.image_b64 = imgEl.src;
 
-    // Wan2GP 새 탭 열기
-    window.open(WAN2GP_URL, '_blank');
+      const qRes = await fetch('/api/comfyui/queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const qData = await qRes.json();
+      if (!qRes.ok) throw new Error(qData.error || '큐 제출 실패');
 
-    // 안내 메시지 표시
-    notice.classList.remove('hidden');
-    notice.innerHTML = [
-      '📋 <b>프롬프트가 클립보드에 복사됐습니다.</b>',
-      'Wan2GP 탭에서:',
-      hasImage
-        ? '① 이미지를 드래그하여 업로드 → ② 프롬프트 붙여넣기(Ctrl+V) → ③ Generate 클릭'
-        : '① 프롬프트 붙여넣기(Ctrl+V) → ② Generate 클릭',
-      hasImage ? '<span class="text-yellow-300">⬇ 이미지도 먼저 다운로드하세요.</span>' : '',
-    ].filter(Boolean).join('<br>');
+      const promptId = qData.prompt_id;
+      statusTxt.textContent = '🎬 영상 생성 중… (수 분 소요)';
+
+      // 5초마다 상태 폴링, 최대 15분
+      for (let i = 0; i < 180; i++) {
+        await new Promise(r => setTimeout(r, 5000));
+        const sRes  = await fetch(`/api/comfyui/status/${promptId}`);
+        const sData = await sRes.json();
+        if (sData.status === 'done') {
+          videoEl.src = sData.video_url;
+          dlEl.href   = sData.video_url;
+          videoWrap.classList.remove('hidden');
+          statusTxt.textContent = '✅ 완료!';
+          return;
+        }
+        if (sData.status === 'error') throw new Error(sData.error || '생성 오류');
+      }
+      throw new Error('시간 초과 (15분)');
+    } catch (e) {
+      statusDiv.classList.add('hidden');
+      errEl.textContent = '❌ ' + e.message;
+      errEl.classList.remove('hidden');
+    } finally {
+      if (i2vBtn) i2vBtn.disabled = false;
+      if (t2vBtn) t2vBtn.disabled = false;
+    }
   };
 
 </script>
