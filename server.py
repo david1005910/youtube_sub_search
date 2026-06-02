@@ -20,7 +20,8 @@ def load_env():
         'GEMINI_MODEL': 'gemini-2.5-flash',
         'TRANSCRIPT_API_KEY': '',
         'XAI_API_KEY': '',
-        'COMFYUI_URL': 'http://100.78.58.105:8000',
+        'COMFYUI_URL': 'http://100.78.58.105:8004',
+        'COMFY_API_KEY': '',
     }
     if ENV_FILE.exists():
         for line in ENV_FILE.read_text(encoding='utf-8').splitlines():
@@ -37,14 +38,15 @@ def save_env(data):
         f"GEMINI_MODEL={data.get('GEMINI_MODEL', 'gemini-2.5-flash')}\n"
         f"TRANSCRIPT_API_KEY={data.get('TRANSCRIPT_API_KEY', '')}\n"
         f"XAI_API_KEY={data.get('XAI_API_KEY', '')}\n"
-        f"COMFYUI_URL={data.get('COMFYUI_URL', 'http://100.78.58.105:8000')}\n"
+        f"COMFYUI_URL={data.get('COMFYUI_URL', 'http://100.78.58.105:8004')}\n"
+        f"COMFY_API_KEY={data.get('COMFY_API_KEY', '')}\n"
     )
     ENV_FILE.write_text(content, encoding='utf-8')
 
 # ── ComfyUI REST API 클라이언트 ─────────────────────────────────────────────
 
 def _comfyui_base():
-    return load_env().get('COMFYUI_URL', 'http://100.78.58.105:8000').rstrip('/')
+    return load_env().get('COMFYUI_URL', 'http://100.78.58.105:8004').rstrip('/')
 
 def _comfyui_req(method, path, data=None, raw=None, ctype='application/json', timeout=30):
     url = _comfyui_base() + path
@@ -67,10 +69,13 @@ def comfyui_upload_image(b64_data):
                        ctype=f'multipart/form-data; boundary={bnd}')
     return res.get('name', 'upload.png')
 
-def comfyui_queue(workflow):
+def comfyui_queue(workflow, extra_data=None):
     """워크플로 제출 → prompt_id 반환"""
     cid = uuid.uuid4().hex
-    res = _comfyui_req('POST', '/prompt', data={'prompt': workflow, 'client_id': cid})
+    body = {'prompt': workflow, 'client_id': cid}
+    if extra_data:
+        body['extra_data'] = extra_data
+    res = _comfyui_req('POST', '/prompt', data=body)
     return res.get('prompt_id')
 
 def comfyui_get_output(prompt_id):
@@ -90,35 +95,78 @@ def comfyui_get_output(prompt_id):
                     return item, 'done'
     return None, 'pending'
 
+WAN_GEN_SCRIPT = r'C:\Users\sharkey\wan_gen.py'
+WAN_GEN_PYTHON = r'C:\pinokio\api\wan.git\app\env\Scripts\python.exe'
+
+def wan_queue_ssh(prompt, mode='t2v', image_b64=None):
+    """SSH로 데스크탑에서 wan_gen.py 실행 → job_id(타임스탬프) 반환"""
+    SSH_OPTS = ['-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=10']
+    cmd = [WAN_GEN_PYTHON, WAN_GEN_SCRIPT, prompt]
+    ssh_cmd = ['ssh'] + SSH_OPTS + ['sharkey@100.78.58.105',
+                                     f'"{WAN_GEN_PYTHON}" "{WAN_GEN_SCRIPT}" "{prompt}"']
+    # 백그라운드로 실행 (결과는 SSH 파일 감시로 확인)
+    start_ts = int(time.time())
+    t = threading.Thread(
+        target=lambda: subprocess.run(ssh_cmd, capture_output=True, timeout=960),
+        daemon=True
+    )
+    t.start()
+    return str(start_ts)
+
 def wan_queue(prompt, mode='t2v', image_b64=None, seed=-1):
     """ComfyUI 워크플로 제출 → prompt_id 반환"""
     import random
     actual_seed = seed if seed >= 0 else random.randint(0, 2147483647)
+    api_key = load_env().get('COMFY_API_KEY', '')
+
     wf_file = WF_DIR / ('wan_i2v.json' if (mode == 'i2v' and image_b64) else 'wan_t2v.json')
     wf = json.loads(wf_file.read_text(encoding='utf-8'))
+
     wf_str = json.dumps(wf)
     wf_str = wf_str.replace('"__PROMPT__"', json.dumps(prompt))
     wf_str = wf_str.replace('-1', str(actual_seed))
     if mode == 'i2v' and image_b64:
         img_name = comfyui_upload_image(image_b64)
         wf_str = wf_str.replace('"__IMAGE_FILENAME__"', json.dumps(img_name))
-    return comfyui_queue(json.loads(wf_str))
 
-def wan_get_status(prompt_id):
-    """ComfyUI history 폴링 → {'status', 'video_url'?}"""
+    # API 키는 extra_data로 전달 (hidden inputs는 extra_data에서 읽힘)
+    extra_data = {'api_key_comfy_org': api_key} if api_key else None
+    return comfyui_queue(json.loads(wf_str), extra_data=extra_data)
+
+WAN_OUT_DIR  = r'C:\pinokio\api\wan.git\app\outputs'
+SSH_OPTS_LIST = ['-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=10']
+
+def wan_get_status(job_id):
+    """SSH로 출력 디렉토리 감시 → {'status', 'video_url'?}"""
     try:
-        item, state = comfyui_get_output(prompt_id)
+        since_ts = int(job_id)
+    except ValueError:
+        return {'status': 'error', 'error': '잘못된 job_id'}
+    try:
+        dt = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(since_ts))
+        ps = (f"powershell -Command \""
+              f"Get-ChildItem '{WAN_OUT_DIR}' -Filter *.mp4 "
+              f"| Where-Object {{ $_.LastWriteTime -gt '{dt}' }} "
+              f"| Sort-Object LastWriteTime -Descending "
+              f"| Select-Object -First 1 -ExpandProperty FullName\"")
+        r = subprocess.run(
+            ['ssh'] + SSH_OPTS_LIST + ['sharkey@100.78.58.105', ps],
+            capture_output=True, text=True, timeout=15
+        )
+        path = r.stdout.strip()
+        if not path:
+            return {'status': 'pending'}
+        # SCP로 노트북에 다운로드
+        local = tempfile.mktemp(suffix='.mp4', dir='/tmp')
+        remote_scp = path.replace('\\', '/').replace('C:/', '/c/')
+        subprocess.run(
+            ['scp'] + SSH_OPTS_LIST + [f'sharkey@100.78.58.105:{remote_scp}', local],
+            check=True, timeout=120
+        )
+        video_url = f'/api/wan/video?local={urllib.parse.quote(local)}'
+        return {'status': 'done', 'video_url': video_url}
     except Exception as e:
         return {'status': 'pending', 'debug': str(e)}
-    if state == 'pending':
-        return {'status': 'pending'}
-    if state.startswith('error:'):
-        return {'status': 'error', 'error': state[6:]}
-    fn   = urllib.parse.quote(item['filename'])
-    ftype = item.get('type', 'output')
-    subfolder = item.get('subfolder', '')
-    url = f'/api/wan/video?filename={fn}&type={ftype}&subfolder={urllib.parse.quote(subfolder)}'
-    return {'status': 'done', 'video_url': url}
 
 # ── claude-youtube-main 스킬 (YouTube Creator AI) ──
 def get_skill_content(skill_name):
@@ -198,26 +246,17 @@ class Handler(SimpleHTTPRequestHandler):
                 _send_json(self, 500, {'error': str(e)})
 
         elif self.path.startswith('/api/wan/video'):
-            qs        = urllib.parse.parse_qs(self.path.split('?', 1)[-1])
-            filename  = qs.get('filename', [''])[0]
-            ftype     = qs.get('type', ['output'])[0]
-            subfolder = qs.get('subfolder', [''])[0]
-            if not filename:
-                _send_json(self, 400, {'error': 'filename 없음'}); return
-            comfy_url = (f"{_comfyui_base()}/view"
-                         f"?filename={urllib.parse.quote(filename)}"
-                         f"&type={ftype}"
-                         f"&subfolder={urllib.parse.quote(subfolder)}")
+            qs    = urllib.parse.parse_qs(self.path.split('?', 1)[-1])
+            local = qs.get('local', [''])[0]
+            if not local or not Path(local).exists():
+                _send_json(self, 404, {'error': '영상 파일 없음'}); return
             try:
-                req = urllib.request.Request(comfy_url)
-                with urllib.request.urlopen(req, timeout=60) as r:
-                    video_data = r.read()
-                    ctype = r.headers.get('Content-Type', 'video/mp4')
+                video_data = Path(local).read_bytes()
                 self.send_response(200)
-                self.send_header('Content-Type', ctype)
+                self.send_header('Content-Type', 'video/mp4')
                 self.send_header('Content-Length', len(video_data))
                 self.send_header('Content-Disposition',
-                                 f'inline; filename="{filename}"')
+                                 f'inline; filename="{Path(local).name}"')
                 self.end_headers()
                 self.wfile.write(video_data)
             except Exception as e:
@@ -322,15 +361,51 @@ class Handler(SimpleHTTPRequestHandler):
             prompt  = data.get('prompt', '')
             img_b64 = data.get('image_b64', '')
             try:
-                prompt_id = wan_queue(
+                job_id = wan_queue_ssh(
                     prompt    = prompt,
                     mode      = mode,
                     image_b64 = img_b64 if mode == 'i2v' else None,
-                    seed      = data.get('seed', -1),
                 )
-                _send_json(self, 200, {'prompt_id': prompt_id})
+                _send_json(self, 200, {'prompt_id': job_id})
             except Exception as e:
                 _send_json(self, 500, {'error': str(e)})
+
+        elif self.path == '/api/proxy/sdwebui':
+            # SD WebUI REST API 프록시 — txt2img / img2img / extra-single-image
+            data     = json.loads(body_raw)
+            endpoint = data.pop('_endpoint', 'txt2img')  # txt2img | img2img | extra-single-image
+            sd_url   = f'http://localhost:7860/sdapi/v1/{endpoint}'
+            req_body = json.dumps(data).encode()
+            req = urllib.request.Request(
+                sd_url, data=req_body,
+                headers={'Content-Type': 'application/json'},
+                method='POST',
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=300) as r:
+                    resp_body = r.read()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', len(resp_body))
+                self.end_headers()
+                self.wfile.write(resp_body)
+            except urllib.error.HTTPError as e:
+                err_body = e.read() or b'{}'
+                self.send_response(e.code)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', len(err_body))
+                self.end_headers()
+                self.wfile.write(err_body)
+            except Exception as e:
+                _send_json(self, 503, {'error': f'SD WebUI 연결 실패: {str(e)}'})
+
+        elif self.path == '/api/sdwebui/status':
+            # SD WebUI 실행 여부 확인
+            try:
+                with urllib.request.urlopen('http://localhost:7860/sdapi/v1/progress', timeout=3) as r:
+                    _send_json(self, 200, {'online': True})
+            except Exception:
+                _send_json(self, 200, {'online': False})
 
         else:
             self.send_response(404)
