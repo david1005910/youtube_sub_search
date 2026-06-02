@@ -262,6 +262,13 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception as e:
                 _send_json(self, 500, {'error': str(e)})
 
+        elif self.path == '/api/sdwebui/status':
+            try:
+                with urllib.request.urlopen('http://localhost:7860/sdapi/v1/progress', timeout=3) as r:
+                    _send_json(self, 200, {'online': True})
+            except Exception:
+                _send_json(self, 200, {'online': False})
+
         else:
             super().do_GET()
 
