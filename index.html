@@ -2396,13 +2396,16 @@ ${commentText}
     try {
       if (_imageProvider === 'pollinations') {
         if (spinLabel) spinLabel.textContent = 'Pollinations 생성 중…';
-        const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&nologo=true&enhance=false`;
-        const resp = await fetch(url);
-        if (!resp.ok) throw new Error(`Pollinations 오류: HTTP ${resp.status}`);
-        const blob = await resp.blob();
-        const blobUrl = URL.createObjectURL(blob);
-        imgEl.src = blobUrl;
-        dlEl.href = blobUrl;
+        const res  = await fetch('/api/proxy/pollinations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt, width: 1024, height: 1024, model: 'flux' }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Pollinations 오류: HTTP ${res.status}`);
+        const src = `data:${data.mimeType || 'image/jpeg'};base64,${data.b64}`;
+        imgEl.src = src;
+        dlEl.href = src;
         dlEl.download = 'pollinations.png';
       } else {
         if (spinLabel) spinLabel.textContent = 'Gemini Imagen 생성 중…';
@@ -2858,13 +2861,16 @@ ${commentText}
       if (_imageProvider === 'pollinations') {
         if (spinLabel) spinLabel.textContent = '② Pollinations 생성 중…';
         if (btn) btn.textContent = '생성 중…';
-        const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&nologo=true&enhance=false`;
-        const resp = await fetch(url);
-        if (!resp.ok) throw new Error(`Pollinations 오류: HTTP ${resp.status}`);
-        const blob = await resp.blob();
-        const blobUrl = URL.createObjectURL(blob);
-        imgEl.src = blobUrl;
-        dlEl.href = blobUrl;
+        const res  = await fetch('/api/proxy/pollinations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt, width: 1024, height: 1024, model: 'flux' }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Pollinations 오류: HTTP ${res.status}`);
+        const src = `data:${data.mimeType || 'image/jpeg'};base64,${data.b64}`;
+        imgEl.src = src;
+        dlEl.href = src;
         dlEl.download = `pollinations-${idx + 1}.png`;
       } else {
         if (spinLabel) spinLabel.textContent = '② Gemini Imagen 생성 중…';

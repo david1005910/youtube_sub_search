@@ -368,6 +368,51 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception as e:
                 _send_json(self, 500, {'error': str(e)})
 
+        elif self.path == '/api/proxy/pollinations':
+            import base64, time as _time
+            data   = json.loads(body_raw)
+            prompt = data.get('prompt', '')
+            width  = int(data.get('width',  1024))
+            height = int(data.get('height', 1024))
+            model  = data.get('model', 'flux')
+            seed   = data.get('seed', '')
+            if not prompt:
+                _send_json(self, 400, {'error': 'prompt required'}); return
+            qs_parts = [f'width={width}', f'height={height}', f'model={model}']
+            if seed: qs_parts.append(f'seed={seed}')
+            url = f'https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}?{"&".join(qs_parts)}'
+            last_err = None
+            for attempt in range(4):          # 큐 풀(402) 시 최대 4회 재시도
+                if attempt > 0:
+                    _time.sleep(5 * attempt)  # 5s, 10s, 15s
+                req = urllib.request.Request(url, headers={
+                    'User-Agent': 'Mozilla/5.0 (compatible; YouTubeContentTool/1.0)',
+                    'Accept': 'image/*,*/*',
+                })
+                try:
+                    with urllib.request.urlopen(req, timeout=90) as resp:
+                        img_bytes = resp.read()
+                        ct = resp.headers.get('Content-Type', 'image/jpeg')
+                    b64 = base64.b64encode(img_bytes).decode()
+                    _send_json(self, 200, {'b64': b64, 'mimeType': ct})
+                    last_err = None
+                    break
+                except urllib.error.HTTPError as e:
+                    err_body = e.read() or b'{}'
+                    try:
+                        msg = json.loads(err_body).get('error', f'HTTP {e.code}')
+                    except Exception:
+                        msg = f'HTTP {e.code}'
+                    last_err = (e.code, msg)
+                    if e.code not in (402, 429):  # 큐풀/과부하가 아니면 즉시 실패
+                        break
+                except Exception as e:
+                    last_err = (500, str(e))
+                    break
+            if last_err:
+                code, msg = last_err
+                _send_json(self, code, {'error': f'Pollinations: {msg}'})
+
         elif self.path == '/api/comfyui/queue':
             data    = json.loads(body_raw)
             mode    = data.get('mode', 't2v')
