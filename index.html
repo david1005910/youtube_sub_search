@@ -2730,7 +2730,16 @@ ${commentText}
               ? 'bg-yellow-900/20 border-yellow-700/50 text-yellow-300'
               : 'bg-red-900/20 border-red-700/50 text-red-300'
         }`;
-        valEl.innerHTML = valResult.split('\n').map(l => `<p>${escHtml(l)}</p>`).join('');
+        const valLines = valResult.split('\n');
+        const suggestion = valLines.slice(1).join(' ').trim();
+        const showFix = !isGood && suggestion && suggestion !== '개선 불필요';
+        valEl.innerHTML = valLines.map(l => `<p>${escHtml(l)}</p>`).join('') +
+          (showFix ? `<button onclick="improvePromptForCard(${idx}, ${JSON.stringify(suggestion)})"
+            id="improve-btn-${idx}"
+            class="mt-2 text-[10px] font-semibold bg-yellow-800/50 hover:bg-yellow-700/70
+                   text-yellow-200 px-2.5 py-1 rounded-md border border-yellow-600/50 transition">
+            ✨ AI 프롬프트 자동 개선
+          </button>` : '');
         valEl.classList.remove('hidden');
       }
 
@@ -2770,12 +2779,87 @@ ${commentText}
       }
       imgWrap.classList.remove('hidden');
     } catch (e) {
-      errEl.textContent = '오류: ' + e.message;
+      const otherLabel = _imageProvider === 'pollinations' ? '🎨 Gemini로 전환 후 재시도' : '🌸 Pollinations로 전환 후 재시도';
+      errEl.innerHTML = `
+        <p class="mb-2 font-semibold">오류: ${escHtml(e.message)}</p>
+        <div class="flex gap-1.5 flex-wrap mt-1">
+          <button onclick="generateSingleGrokImage(${idx})"
+            class="text-[10px] font-semibold bg-slate-700 hover:bg-slate-600 text-slate-200
+                   px-2.5 py-1 rounded-md border border-slate-600 transition">
+            🔄 다시 시도
+          </button>
+          <button onclick="switchProviderAndRetry(${idx})"
+            class="text-[10px] font-semibold bg-blue-900/50 hover:bg-blue-800/70 text-blue-300
+                   px-2.5 py-1 rounded-md border border-blue-700/50 transition">
+            ${escHtml(otherLabel)}
+          </button>
+          <button onclick="improvePromptAndRetry(${idx})"
+            class="text-[10px] font-semibold bg-yellow-800/50 hover:bg-yellow-700/70 text-yellow-200
+                   px-2.5 py-1 rounded-md border border-yellow-600/50 transition">
+            ✨ 프롬프트 AI 수정 후 재시도
+          </button>
+        </div>`;
       errEl.classList.remove('hidden');
     } finally {
       spinEl.classList.add('hidden');
       if (spinLabel) spinLabel.textContent = _imageProvider === 'pollinations' ? 'Pollinations 생성 중…' : 'Gemini Imagen 생성 중…';
       if (btn) { btn.disabled = false; btn.textContent = '🎨 이미지 생성'; }
+    }
+  };
+
+  // ── 검증 미스매치: AI 프롬프트 자동 개선 ──
+  window.improvePromptForCard = async (idx, suggestion) => {
+    const promptEl = document.getElementById(`img-prompt-${idx}`);
+    const cutEl    = document.getElementById(`img-cut-${idx}`);
+    if (!promptEl) return;
+    const btn = document.getElementById(`improve-btn-${idx}`);
+    if (btn) { btn.disabled = true; btn.textContent = '개선 중…'; }
+    try {
+      const improved = await geminiChat(
+        '당신은 AI 이미지 프롬프트 최적화 전문가입니다. 개선 제안을 반영하여 더 나은 영어 이미지 생성 프롬프트를 작성하세요. 반드시 영어로만, 개선된 프롬프트만 출력하세요 (설명 없이).',
+        [{ role: 'user', parts: [{ text:
+          `현재 프롬프트:\n${promptEl.value.trim()}\n\n`+
+          `장면 묘사 (참조):\n${cutEl ? cutEl.value.trim() : ''}\n\n`+
+          `개선 제안:\n${suggestion}`
+        }] }]
+      );
+      promptEl.value = improved.trim().replace(/^["'`\s]+|["'`\s]+$/g, '');
+      if (_imageCards[idx]) _imageCards[idx].prompt = promptEl.value;
+      if (btn) { btn.disabled = false; btn.textContent = '✅ 개선 완료 — 다시 생성하세요'; }
+    } catch (e) {
+      if (btn) { btn.disabled = false; btn.textContent = '✨ AI 프롬프트 자동 개선'; }
+      alert('개선 실패: ' + e.message);
+    }
+  };
+
+  // ── 오류: 제공자 전환 후 재시도 ──
+  window.switchProviderAndRetry = (idx) => {
+    const other = _imageProvider === 'pollinations' ? 'gemini' : 'pollinations';
+    setImageProvider(other);
+    generateSingleGrokImage(idx);
+  };
+
+  // ── 오류: AI가 프롬프트 수정 후 재시도 ──
+  window.improvePromptAndRetry = async (idx) => {
+    const promptEl = document.getElementById(`img-prompt-${idx}`);
+    const cutEl    = document.getElementById(`img-cut-${idx}`);
+    const errEl    = document.getElementById(`grok-err-${idx}`);
+    if (!promptEl) return;
+    if (errEl) errEl.innerHTML = '<p class="text-xs text-yellow-400">✨ 프롬프트 AI 수정 중…</p>';
+    try {
+      const improved = await geminiChat(
+        '당신은 AI 이미지 프롬프트 최적화 전문가입니다. 주어진 프롬프트가 이미지 생성에 실패했습니다. 특정 실존 인물 이름, 저작권 캐릭터, 선정적·폭력적 요소를 제거하고 장면 묘사를 기반으로 안전하고 시각적으로 매력적인 프롬프트로 재작성하세요. 영어로만, 프롬프트만 출력하세요.',
+        [{ role: 'user', parts: [{ text:
+          `현재 프롬프트:\n${promptEl.value.trim()}\n\n`+
+          `장면 묘사 (참조):\n${cutEl ? cutEl.value.trim() : ''}`
+        }] }]
+      );
+      promptEl.value = improved.trim().replace(/^["'`\s]+|["'`\s]+$/g, '');
+      if (_imageCards[idx]) _imageCards[idx].prompt = promptEl.value;
+      if (errEl) errEl.classList.add('hidden');
+      await generateSingleGrokImage(idx);
+    } catch (e) {
+      if (errEl) errEl.innerHTML = `<p>수정 실패: ${escHtml(e.message)}</p>`;
     }
   };
 
