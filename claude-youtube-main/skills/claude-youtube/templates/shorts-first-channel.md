@@ -93,3 +93,4 @@ Shorts growth is nonlinear — one viral hit can add 10K-50K subs in a week. But
 **2. Music licensing revenue drain** — Using trending licensed audio on every Short. Each track with a licensed song forces a 50% revenue share to the rights holder, cutting already-low RPM in half. **Fix**: Use original audio, voiceover, or royalty-free music for at least 50% of Shorts. Save licensed audio for trend-riding Hero content where virality justifies the revenue split.
 
 **3. Ignoring the freshness window** — Taking a 2-week break and expecting to resume where you left off. The September 2025 algorithm update weights recency heavily — Shorts older than 28-30 days receive drastically reduced distribution. Inconsistent posting resets the channel's momentum. **Fix**: Build a 2-week content buffer. Batch-film 20-30 Shorts in one session. Schedule daily publishing even during breaks. If you stop posting, expect 2-3 weeks of rebuilding before distribution normalises.
+    
