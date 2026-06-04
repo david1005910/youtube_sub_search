@@ -2264,7 +2264,9 @@ ${commentText}
         const dirM    = block.match(/📹\s*촬영[\/\/]편집\s*방향\s*[:：]\s*([\s\S]+?)(?=\n📌|\n\n|$)/);
 
         const prompt = promptM
-          ? promptM[1].trim().replace(/^[\[【『「\s]+|[\]】』」\s]+$/g, '').trim()
+          ? promptM[1].trim()
+              .replace(/^\*+\s*/gm, '').replace(/\*+/g, '')
+              .replace(/^[\[【『「\s]+|[\]】』」\s]+$/g, '').trim()
           : '';
         if (!prompt || prompt.length < 5 || seen.has(prompt)) return;
         seen.add(prompt);
@@ -2368,7 +2370,7 @@ ${commentText}
   }
 
   window.generateSimpleImage = async () => {
-    const prompt = document.getElementById('simple-img-prompt')?.value.trim();
+    const prompt = cleanImagePrompt(document.getElementById('simple-img-prompt')?.value.trim() || '');
     if (!prompt) return;
     const spinEl    = document.getElementById('simple-spin');
     const spinLabel = document.getElementById('simple-spin-label');
@@ -2691,10 +2693,23 @@ ${commentText}
       .catch(() => alert('복사 실패 — 브라우저 권한을 확인해주세요.'));
   };
 
+  function cleanImagePrompt(raw) {
+    return raw
+      .replace(/^\*+\s*/gm, '')          // 줄 앞의 ** 제거
+      .replace(/\*+/g, '')               // 나머지 * 제거
+      .replace(/^\s*\[|\]\s*$/g, '')     // 맨 앞/뒤 [] 제거
+      .replace(/\n+/g, ' ')             // 줄바꿈 → 공백
+      .trim();
+  }
+  window.cleanImagePrompt = cleanImagePrompt;
+
   window.generateSingleGrokImage = async (idx) => {
     const promptEl  = document.getElementById(`img-prompt-${idx}`);
-    const prompt    = (promptEl ? promptEl.value : '').trim() || (_imageCards[idx]?.prompt ?? '');
+    const rawPrompt = (promptEl ? promptEl.value : '').trim() || (_imageCards[idx]?.prompt ?? '');
+    const prompt    = cleanImagePrompt(rawPrompt);
     if (!prompt) return;
+    // 정제된 프롬프트로 textarea도 업데이트
+    if (promptEl && rawPrompt !== prompt) promptEl.value = prompt;
 
     const cutEl    = document.getElementById(`img-cut-${idx}`);
     const cutDesc  = cutEl ? cutEl.value.trim() : (_imageCards[idx]?.cutDescription ?? '');
