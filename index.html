@@ -2282,12 +2282,22 @@ ${commentText}
       });
     });
 
-    // _cachedOutline 챕터 스크립트를 순서대로 연계
+    // _cachedOutline 챕터 데이터를 순서대로 연계
     if (_cachedOutline?.chapters?.length) {
       cards.forEach((card, i) => {
         const ch = _cachedOutline.chapters[i];
         if (!ch) return;
         card.chapterScript = ch.script ? ch.script.trim() : '';
+        // 컷 묘사 — 비어있으면 챕터 키포인트로 채움
+        if (!card.cutDescription && (ch.points?.length || ch.title)) {
+          const pts = (ch.points || []).join(' / ');
+          card.cutDescription = pts || ch.title || '';
+        }
+        // 촬영/편집 방향 — 비어있으면 챕터 스크립트 앞부분 요약
+        if (!card.direction && card.chapterScript) {
+          card.direction = card.chapterScript.slice(0, 80).trim() + (card.chapterScript.length > 80 ? '…' : '');
+        }
+        // 자막 — 비어있으면 나레이션 스크립트로 채움
         if (!card.subtitles && card.chapterScript) {
           card.subtitles = card.chapterScript;
         }
@@ -2578,7 +2588,18 @@ ${commentText}
                     </div>
                   </div>` : ''}
                   <div>
-                    <label class="block text-[11px] font-semibold text-slate-400 mb-1">🎥 컷 묘사</label>
+                    <div class="flex items-center justify-between mb-1">
+                      <label class="text-[11px] font-semibold text-slate-400">🎥 컷 묘사</label>
+                      <button onclick="generateCutForCard(${i})" id="cut-gen-btn-${i}"
+                        class="text-[10px] font-semibold bg-slate-700/70 hover:bg-slate-600 text-slate-300
+                               px-2 py-0.5 rounded-md border border-slate-600 transition whitespace-nowrap">
+                        ✨ AI 생성
+                      </button>
+                    </div>
+                    <div id="cut-gen-spin-${i}" class="hidden flex items-center gap-1.5 mb-1">
+                      <div class="spinner" style="width:12px;height:12px;border-width:2px;border-top-color:#94a3b8"></div>
+                      <span class="text-[10px] text-slate-400">컷 묘사 생성 중…</span>
+                    </div>
                     <textarea id="img-cut-${i}" rows="2"
                       class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-xs text-slate-300
                              resize-none focus:outline-none focus:border-slate-500"
@@ -2586,7 +2607,18 @@ ${commentText}
                     >${escHtml(card.cutDescription)}</textarea>
                   </div>
                   <div>
-                    <label class="block text-[11px] font-semibold text-slate-400 mb-1">📹 촬영/편집 방향</label>
+                    <div class="flex items-center justify-between mb-1">
+                      <label class="text-[11px] font-semibold text-slate-400">📹 촬영/편집 방향</label>
+                      <button onclick="generateDirectionForCard(${i})" id="dir-gen-btn-${i}"
+                        class="text-[10px] font-semibold bg-slate-700/70 hover:bg-slate-600 text-slate-300
+                               px-2 py-0.5 rounded-md border border-slate-600 transition whitespace-nowrap">
+                        ✨ AI 생성
+                      </button>
+                    </div>
+                    <div id="dir-gen-spin-${i}" class="hidden flex items-center gap-1.5 mb-1">
+                      <div class="spinner" style="width:12px;height:12px;border-width:2px;border-top-color:#94a3b8"></div>
+                      <span class="text-[10px] text-slate-400">촬영 방향 생성 중…</span>
+                    </div>
                     <textarea id="img-dir-${i}" rows="2"
                       class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-xs text-slate-300
                              resize-none focus:outline-none focus:border-slate-500"
@@ -2626,6 +2658,70 @@ ${commentText}
     const arrow = document.getElementById(`edit-arrow-${idx}`);
     const nowHidden = panel.classList.toggle('hidden');
     if (arrow) arrow.textContent = nowHidden ? '▾' : '▴';
+  };
+
+  window.generateCutForCard = async (idx) => {
+    const card    = _imageCards[idx];
+    const script  = card?.chapterScript || document.getElementById(`img-sub-${idx}`)?.value.trim() || '';
+    const title   = card?.chapterTitle || '';
+    const prompt  = document.getElementById(`img-prompt-${idx}`)?.value.trim() || card?.prompt || '';
+    if (!script && !prompt) { alert('나레이션 스크립트 또는 이미지 프롬프트가 없습니다.'); return; }
+
+    const btn    = document.getElementById(`cut-gen-btn-${idx}`);
+    const spinEl = document.getElementById(`cut-gen-spin-${idx}`);
+    const el     = document.getElementById(`img-cut-${idx}`);
+    if (btn)    { btn.disabled = true; btn.textContent = '생성 중…'; }
+    if (spinEl) spinEl.classList.remove('hidden');
+
+    try {
+      const context = [
+        title  ? `챕터 제목: ${title}` : '',
+        script ? `나레이션 스크립트: ${script}` : '',
+        prompt ? `이미지 프롬프트 (참조): ${prompt}` : '',
+      ].filter(Boolean).join('\n');
+
+      const result = await geminiChat(
+        '당신은 유튜브 영상 편집 전문가입니다. 주어진 챕터 정보를 바탕으로 해당 장면에 화면에 보여줄 구체적인 컷 묘사를 작성하세요. 시각적으로 매력적이고 시청자의 관심을 끌 수 있는 장면을 2~4문장의 한국어로 묘사하세요. 컷 묘사 텍스트만 출력하세요.',
+        [{ role: 'user', parts: [{ text: context }] }]
+      );
+      if (el) { el.value = result.trim(); if (_imageCards[idx]) _imageCards[idx].cutDescription = el.value; }
+    } catch(e) { alert('컷 묘사 생성 실패: ' + e.message); }
+    finally {
+      if (btn)    { btn.disabled = false; btn.textContent = '✨ AI 생성'; }
+      if (spinEl) spinEl.classList.add('hidden');
+    }
+  };
+
+  window.generateDirectionForCard = async (idx) => {
+    const card    = _imageCards[idx];
+    const script  = card?.chapterScript || document.getElementById(`img-sub-${idx}`)?.value.trim() || '';
+    const cut     = document.getElementById(`img-cut-${idx}`)?.value.trim() || card?.cutDescription || '';
+    const title   = card?.chapterTitle || '';
+    if (!script && !cut) { alert('나레이션 스크립트 또는 컷 묘사가 없습니다.'); return; }
+
+    const btn    = document.getElementById(`dir-gen-btn-${idx}`);
+    const spinEl = document.getElementById(`dir-gen-spin-${idx}`);
+    const el     = document.getElementById(`img-dir-${idx}`);
+    if (btn)    { btn.disabled = true; btn.textContent = '생성 중…'; }
+    if (spinEl) spinEl.classList.remove('hidden');
+
+    try {
+      const context = [
+        title  ? `챕터 제목: ${title}` : '',
+        script ? `나레이션 스크립트: ${script}` : '',
+        cut    ? `컷 묘사: ${cut}` : '',
+      ].filter(Boolean).join('\n');
+
+      const result = await geminiChat(
+        '당신은 유튜브 영상 촬영 및 편집 전문가입니다. 주어진 챕터 정보를 바탕으로 구체적인 촬영/편집 방향을 작성하세요. B-roll 활용, 텍스트 오버레이, 전환 효과, 배경 음악 제안 등을 포함하여 실제 편집에 바로 활용할 수 있는 지침을 3~5개 항목으로 한국어로 작성하세요. 지침 텍스트만 출력하세요.',
+        [{ role: 'user', parts: [{ text: context }] }]
+      );
+      if (el) { el.value = result.trim(); if (_imageCards[idx]) _imageCards[idx].direction = el.value; }
+    } catch(e) { alert('촬영 방향 생성 실패: ' + e.message); }
+    finally {
+      if (btn)    { btn.disabled = false; btn.textContent = '✨ AI 생성'; }
+      if (spinEl) spinEl.classList.add('hidden');
+    }
   };
 
   window.generateSubtitleForCard = async (idx) => {
