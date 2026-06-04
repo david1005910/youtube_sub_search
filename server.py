@@ -272,6 +272,12 @@ class Handler(SimpleHTTPRequestHandler):
         else:
             super().do_GET()
 
+    def end_headers(self):
+        # HTML/JS/CSS 파일은 항상 최신 버전 제공
+        if hasattr(self, 'path') and any(self.path.endswith(ext) for ext in ('.html', '.js', '.css', '/')):
+            self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
+        super().end_headers()
+
     def do_POST(self):
         length = int(self.headers.get('Content-Length', 0))
         body_raw = self.rfile.read(length)
@@ -378,9 +384,8 @@ class Handler(SimpleHTTPRequestHandler):
                 _send_json(self, 500, {'error': str(e)})
 
         elif self.path == '/api/proxy/sdwebui':
-            # SD WebUI REST API 프록시 — txt2img / img2img / extra-single-image
             data     = json.loads(body_raw)
-            endpoint = data.pop('_endpoint', 'txt2img')  # txt2img | img2img | extra-single-image
+            endpoint = data.pop('_endpoint', 'txt2img')
             sd_url   = f'http://localhost:7860/sdapi/v1/{endpoint}'
             req_body = json.dumps(data).encode()
             req = urllib.request.Request(
@@ -407,7 +412,6 @@ class Handler(SimpleHTTPRequestHandler):
                 _send_json(self, 503, {'error': f'SD WebUI 연결 실패: {str(e)}'})
 
         elif self.path == '/api/sdwebui/status':
-            # SD WebUI 실행 여부 확인
             try:
                 with urllib.request.urlopen('http://localhost:7860/sdapi/v1/progress', timeout=3) as r:
                     _send_json(self, 200, {'online': True})
@@ -417,6 +421,43 @@ class Handler(SimpleHTTPRequestHandler):
         else:
             self.send_response(404)
             self.end_headers()
+
+    def _proxy_comfy(self, method, raw_path, body):
+        ALLOWED_PREFIXES = ['/system_stats', '/history/', '/view', '/queue', '/prompt', '/object_info']
+        parsed    = urllib.parse.urlparse(raw_path)
+        # strip the /api/proxy/comfy prefix for GET requests
+        comfy_path = parsed.path.replace('/api/proxy/comfy', '', 1) or '/system_stats'
+        if comfy_path == '/prompt':
+            pass  # POST /prompt is always allowed
+        elif not any(comfy_path.startswith(p) for p in ALLOWED_PREFIXES):
+            _send_json(self, 400, {'error': 'invalid comfy path'}); return
+
+        comfy_base = load_env().get('COMFY_URL', 'http://localhost:8188').rstrip('/')
+        qs         = parsed.query
+        url        = f'{comfy_base}{comfy_path}{"?" + qs if qs else ""}'
+        headers    = {'User-Agent': 'YouTubeContentTool/1.0'}
+        if method == 'POST':
+            headers['Content-Type'] = 'application/json'
+
+        req = urllib.request.Request(url, data=body, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                content_type = resp.headers.get('Content-Type', 'application/json')
+                resp_body    = resp.read()
+            self.send_response(200)
+            self.send_header('Content-Type', content_type)
+            self.send_header('Content-Length', len(resp_body))
+            self.end_headers()
+            self.wfile.write(resp_body)
+        except urllib.error.HTTPError as e:
+            err_body = e.read() or b'{}'
+            self.send_response(e.code)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', len(err_body))
+            self.end_headers()
+            self.wfile.write(err_body)
+        except Exception as e:
+            _send_json(self, 500, {'error': str(e)})
 
     def log_message(self, fmt, *args):
         pass  # 로그 출력 끄기

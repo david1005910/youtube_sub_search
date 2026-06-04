@@ -239,6 +239,33 @@
     #subtitleRenderBody::-webkit-scrollbar { width: 6px; }
     #subtitleRenderBody::-webkit-scrollbar-track { background: #0f172a; }
     #subtitleRenderBody::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+    /* ── ComfyUI 영상 생성 위젯 ── */
+    #comfyToggle {
+      position: fixed; bottom: 24px; right: 288px; z-index: 1000;
+      width: 52px; height: 52px; border-radius: 50%;
+      background: linear-gradient(135deg, #4338ca, #7c3aed);
+      border: none; cursor: pointer; font-size: 22px;
+      box-shadow: 0 4px 20px rgba(99,102,241,0.5);
+      transition: transform 0.2s;
+    }
+    #comfyToggle:hover { transform: scale(1.08); }
+    #comfyWindow {
+      position: fixed; right: 288px; z-index: 999;
+      bottom: calc(24px + 52px + 10px);
+      width: 580px;
+      height: min(760px, calc(100vh - 100px));
+      background: #1e293b; border: 1px solid #334155;
+      border-radius: 16px; flex-direction: column;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+      overflow: hidden; display: none;
+    }
+    #comfyWindow.open { display: flex; }
+    #comfyBody {
+      flex: 1; min-height: 0; overflow-y: scroll; padding: 14px;
+    }
+    #comfyBody::-webkit-scrollbar { width: 6px; }
+    #comfyBody::-webkit-scrollbar-track { background: #0f172a; }
+    #comfyBody::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
   </style>
 </head>
 <body class="text-slate-100 min-h-screen">
@@ -451,7 +478,7 @@
       </div>
       <!-- Gemini 이미지 생성 안내 -->
       <div class="border-t border-slate-600/50 pt-4 mt-1 mb-4">
-        <p class="text-xs text-blue-400">🎨 이미지 생성은 위의 <strong>Gemini API 키</strong>를 사용합니다 (Imagen 4 모델)</p>
+        <p class="text-xs text-blue-400">🎨 이미지 생성: <strong>Gemini Imagen 4</strong> (Gemini API 키 필요) 또는 <strong>🌸 Pollinations AI</strong> (무료 · API 키 불필요)</p>
       </div>
       <span id="keySaved" class="text-green-400 text-sm hidden">✓ 저장 완료</span>
     </div>
@@ -598,6 +625,8 @@
       TRANSCRIPT_API_KEY = cfg.TRANSCRIPT_API_KEY || '';
       XAI_API_KEY        = cfg.XAI_API_KEY        || '';
       COMFYUI_URL        = cfg.COMFYUI_URL        || 'http://100.78.58.105:42004';
+      const comfyInput = document.getElementById('comfyUrlInput');
+      if (comfyInput && COMFYUI_URL) comfyInput.value = COMFYUI_URL;
       if (YOUTUBE_API_KEY && GEMINI_API_KEY) {
         document.getElementById('apiPanelBody').classList.add('hidden');
         document.getElementById('apiToggleIcon').textContent = '▼ 펼치기';
@@ -1999,8 +2028,222 @@ ${commentText}
     initSubtitleRenderWidget();
   }
 
+  // ── 🎬 ComfyUI 영상 생성 ────────────────────────────────────────────
+  let _comfyPollTimer = null;
+
+  const COMFY_TEMPLATES = {
+    animatediff: {
+      "1":  {"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"v1-5-pruned-emaonly.safetensors"}},
+      "2":  {"class_type":"CLIPTextEncode","inputs":{"text":"__POSITIVE__","clip":["1",1]}},
+      "3":  {"class_type":"CLIPTextEncode","inputs":{"text":"__NEGATIVE__","clip":["1",1]}},
+      "4":  {"class_type":"ADE_EmptyLatentImageLarge","inputs":{"width":512,"height":512,"batch_size":16,"optional_vae":null}},
+      "5":  {"class_type":"ADE_AnimateDiffLoaderWithContext","inputs":{"model_name":"mm_sd_v15_v2.ckpt","beta_schedule":"sqrt_linear (AnimateDiff)","model":["1",0],"context_options":null,"motion_lora":null,"ad_settings":null,"ad_keyframes":null}},
+      "6":  {"class_type":"KSampler","inputs":{"seed":42,"steps":20,"cfg":7.0,"sampler_name":"euler_ancestral","scheduler":"karras","denoise":1.0,"model":["5",0],"positive":["2",0],"negative":["3",0],"latent_image":["4",0]}},
+      "7":  {"class_type":"VAEDecode","inputs":{"samples":["6",0],"vae":["1",2]}},
+      "8":  {"class_type":"VHS_VideoCombine","inputs":{"frame_rate":8,"loop_count":0,"filename_prefix":"AnimateDiff","format":"video/h264-mp4","pingpong":false,"save_output":true,"images":["7",0]}}
+    },
+    wan: {
+      "1":  {"class_type":"UNETLoader","inputs":{"unet_name":"wan2.1_t2v_1.3B_bf16.safetensors","weight_dtype":"bf16"}},
+      "2":  {"class_type":"CLIPLoader","inputs":{"clip_name":"umt5_xxl_fp8_e4m3fn_scaled.safetensors","type":"wan"}},
+      "3":  {"class_type":"CLIPTextEncode","inputs":{"text":"__POSITIVE__","clip":["2",0]}},
+      "4":  {"class_type":"CLIPTextEncode","inputs":{"text":"__NEGATIVE__","clip":["2",0]}},
+      "5":  {"class_type":"AutoencoderKLWan","inputs":{"vae_name":"wan_2.1_vae.safetensors"}},
+      "6":  {"class_type":"EmptyWanLatentVideo","inputs":{"width":832,"height":480,"length":81,"batch_size":1}},
+      "7":  {"class_type":"KSampler","inputs":{"seed":42,"steps":20,"cfg":6.0,"sampler_name":"uni_pc","scheduler":"simple","denoise":1.0,"model":["1",0],"positive":["3",0],"negative":["4",0],"latent_image":["6",0]}},
+      "8":  {"class_type":"VAEDecode","inputs":{"samples":["7",0],"vae":["5",0]}},
+      "9":  {"class_type":"VHS_VideoCombine","inputs":{"frame_rate":16,"loop_count":0,"filename_prefix":"Wan2.1","format":"video/h264-mp4","pingpong":false,"save_output":true,"images":["8",0]}}
+    }
+  };
+
+  window.loadComfyTemplate = (type) => {
+    const tpl = COMFY_TEMPLATES[type];
+    if (!tpl) return;
+    document.getElementById('comfyWorkflow').value = JSON.stringify(tpl, null, 2);
+  };
+
+  window.testComfyConnection = async () => {
+    const statusEl = document.getElementById('comfyStatus');
+    const url = document.getElementById('comfyUrlInput').value.trim();
+    if (url) {
+      COMFY_URL = url;
+      await fetch('/api/config', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({YOUTUBE_API_KEY, GEMINI_API_KEY, GEMINI_MODEL, TRANSCRIPT_API_KEY, XAI_API_KEY, COMFY_URL})
+      }).catch(() => {});
+    }
+    statusEl.textContent = '연결 중…';
+    statusEl.className = 'text-[10px] px-2 py-0.5 rounded-full bg-yellow-900/40 text-yellow-400';
+    try {
+      const res = await fetch('/api/proxy/comfy?path=/system_stats');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const gpuName = data.system?.cuda_device_type
+        || (data.devices && data.devices[0]?.name)
+        || 'GPU 연결됨';
+      statusEl.textContent = `✅ ${gpuName}`;
+      statusEl.className = 'text-[10px] px-2 py-0.5 rounded-full bg-green-900/40 text-green-400';
+    } catch (e) {
+      statusEl.textContent = '❌ 연결 실패';
+      statusEl.className = 'text-[10px] px-2 py-0.5 rounded-full bg-red-900/40 text-red-400';
+    }
+  };
+
+  function _injectComfyPrompts(wfObj, positive, negative) {
+    const cloned = JSON.parse(JSON.stringify(wfObj));
+    let first = true;
+    for (const node of Object.values(cloned)) {
+      if (node.class_type === 'CLIPTextEncode') {
+        node.inputs.text = first ? positive : negative;
+        first = false;
+      }
+    }
+    // also replace placeholder tokens
+    const str = JSON.stringify(cloned)
+      .replace(/"__POSITIVE__"/g, JSON.stringify(positive))
+      .replace(/"__NEGATIVE__"/g, JSON.stringify(negative))
+      .replace(/"seed":\s*\d+/g, `"seed":${Math.floor(Math.random() * 2147483647)}`);
+    return JSON.parse(str);
+  }
+
+  window.cancelComfyPoll = () => {
+    if (_comfyPollTimer) { clearInterval(_comfyPollTimer); _comfyPollTimer = null; }
+    document.getElementById('comfyProgress').classList.add('hidden');
+    const btn = document.getElementById('comfyGenBtn');
+    const lbl = document.getElementById('comfyGenLabel');
+    const spn = document.getElementById('comfyGenSpinner');
+    btn.disabled = false; lbl.textContent = '▶ 영상 생성 시작'; spn.classList.add('hidden');
+  };
+
+  window.submitComfyGeneration = async () => {
+    const wfText = document.getElementById('comfyWorkflow').value.trim();
+    if (!wfText) {
+      alert('워크플로우 JSON을 입력해주세요.\nAnimateDiff 또는 Wan2.1 템플릿 버튼으로 시작할 수 있습니다.');
+      return;
+    }
+    let wfObj;
+    try { wfObj = JSON.parse(wfText); } catch (e) { alert('JSON 파싱 오류: ' + e.message); return; }
+
+    const positive = document.getElementById('comfyPositive').value.trim() || 'a beautiful cinematic scene, high quality, 4k';
+    const negative = document.getElementById('comfyNegative').value.trim() || 'blurry, low quality, watermark, deformed';
+
+    const workflow = _injectComfyPrompts(wfObj, positive, negative);
+
+    const btn = document.getElementById('comfyGenBtn');
+    const lbl = document.getElementById('comfyGenLabel');
+    const spn = document.getElementById('comfyGenSpinner');
+    btn.disabled = true; lbl.textContent = '전송 중…'; spn.classList.remove('hidden');
+
+    document.getElementById('comfyResult').classList.add('hidden');
+    document.getElementById('comfyProgress').classList.remove('hidden');
+    document.getElementById('comfyProgressText').textContent = 'ComfyUI에 워크플로우 전송 중…';
+    document.getElementById('comfyProgressBar').style.width = '5%';
+
+    try {
+      const res = await fetch('/api/proxy/comfy/prompt', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({prompt: workflow}),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || err.message || 'HTTP ' + res.status);
+      }
+      const data = await res.json();
+      if (!data.prompt_id) throw new Error('prompt_id 없음 — ComfyUI 서버 연결을 먼저 테스트해주세요.');
+
+      lbl.textContent = '생성 중…';
+      document.getElementById('comfyProgressText').textContent = `대기열 등록 (${data.prompt_id.slice(0,8)}…)`;
+      document.getElementById('comfyProgressBar').style.width = '10%';
+      _pollComfyResult(data.prompt_id);
+    } catch (e) {
+      cancelComfyPoll();
+      alert('오류: ' + e.message);
+    }
+  };
+
+  function _pollComfyResult(promptId) {
+    if (_comfyPollTimer) clearInterval(_comfyPollTimer);
+    let progress = 10;
+    let attempts = 0;
+
+    _comfyPollTimer = setInterval(async () => {
+      attempts++;
+      try {
+        const res = await fetch(`/api/proxy/comfy?path=/history/${promptId}`);
+        const history = await res.json();
+
+        if (!history[promptId]) {
+          progress = Math.min(progress + (attempts < 10 ? 5 : 2), 88);
+          document.getElementById('comfyProgressBar').style.width = progress + '%';
+          document.getElementById('comfyProgressText').textContent = `GPU 생성 중… (${Math.round(progress)}%) — 워크플로우에 따라 수 분 소요`;
+          return;
+        }
+
+        clearInterval(_comfyPollTimer);
+        _comfyPollTimer = null;
+
+        const outputs = history[promptId].outputs || {};
+        let file = null;
+        let isVideo = false;
+        for (const nodeOut of Object.values(outputs)) {
+          if (nodeOut.gifs?.length)    { file = nodeOut.gifs[0];    isVideo = true;  break; }
+          if (nodeOut.videos?.length)  { file = nodeOut.videos[0];  isVideo = true;  break; }
+          if (nodeOut.images?.length)  { file = nodeOut.images[0];  isVideo = false; break; }
+        }
+        if (!file) throw new Error('출력 파일을 찾을 수 없습니다.');
+
+        document.getElementById('comfyProgressText').textContent = '완료! 파일 불러오는 중…';
+        document.getElementById('comfyProgressBar').style.width = '98%';
+
+        const viewUrl = `/api/proxy/comfy?path=/view&filename=${encodeURIComponent(file.filename)}&subfolder=${encodeURIComponent(file.subfolder||'')}&type=${encodeURIComponent(file.type||'output')}`;
+        const fileRes = await fetch(viewUrl);
+        if (!fileRes.ok) throw new Error('파일 다운로드 실패: HTTP ' + fileRes.status);
+        const blob    = await fileRes.blob();
+        const blobUrl = URL.createObjectURL(blob);
+
+        const videoEl = document.getElementById('comfyVideo');
+        const imgEl   = document.getElementById('comfyImage');
+        const dlEl    = document.getElementById('comfyDownload');
+
+        if (isVideo) {
+          videoEl.src = blobUrl; videoEl.style.display = 'block';
+          imgEl.classList.add('hidden');
+        } else {
+          imgEl.src = blobUrl; imgEl.classList.remove('hidden');
+          videoEl.style.display = 'none';
+        }
+        dlEl.href = blobUrl; dlEl.download = file.filename;
+
+        document.getElementById('comfyProgress').classList.add('hidden');
+        document.getElementById('comfyResult').classList.remove('hidden');
+        cancelComfyPoll();
+      } catch (e) {
+        clearInterval(_comfyPollTimer); _comfyPollTimer = null;
+        cancelComfyPoll();
+        alert('결과 확인 오류: ' + e.message);
+      }
+    }, 3000);
+  }
+
+  (() => {
+    const toggle = document.getElementById('comfyToggle');
+    if (!toggle) return;
+    toggle.addEventListener('click', () => {
+      const win = document.getElementById('comfyWindow');
+      win.classList.toggle('open');
+      if (win.classList.contains('open')) {
+        const urlInput = document.getElementById('comfyUrlInput');
+        if (urlInput && !urlInput.value) urlInput.value = COMFY_URL;
+      }
+    });
+    document.getElementById('comfyCloseBtn').addEventListener('click', () => {
+      document.getElementById('comfyWindow').classList.remove('open');
+    });
+  })();
+
   // ── 🎨 Gemini Imagen 이미지 생성 & 편집 ──────────────────────────────
   let _imageCards = [];
+  let _imageProvider = 'gemini'; // 'gemini' | 'pollinations'
 
   function parseCardsFromHistory() {
     const cards = [];
@@ -2032,27 +2275,152 @@ ${commentText}
           prompt,
           direction:      dirM   ? dirM[1].trim()   : '',
           subtitles:      '',
+          chapterScript:  '',
         });
       });
     });
+
+    // _cachedOutline 챕터 스크립트를 순서대로 연계
+    if (_cachedOutline?.chapters?.length) {
+      cards.forEach((card, i) => {
+        const ch = _cachedOutline.chapters[i];
+        if (!ch) return;
+        card.chapterScript = ch.script ? ch.script.trim() : '';
+        if (!card.subtitles && card.chapterScript) {
+          card.subtitles = card.chapterScript;
+        }
+      });
+    }
+
     return cards;
   }
 
+  window.setImageProvider = (provider) => {
+    _imageProvider = provider;
+    document.querySelectorAll('.provider-btn').forEach(btn => {
+      const active = btn.dataset.provider === provider;
+      if (active) {
+        btn.classList.remove('bg-slate-700', 'border-slate-600', 'text-slate-300');
+        btn.classList.add('bg-blue-700', 'border-blue-600', 'text-white');
+      } else {
+        btn.classList.remove('bg-blue-700', 'border-blue-600', 'text-white');
+        btn.classList.add('bg-slate-700', 'border-slate-600', 'text-slate-300');
+      }
+    });
+  };
+
   window.openGrokModal = () => {
-    if (!GEMINI_API_KEY) {
-      alert('Gemini API 키를 먼저 설정해주세요.\n🔑 API 키 설정 → Gemini API 키 입력 → 키 저장');
-      return;
-    }
     const cards = parseCardsFromHistory();
-    if (!cards.length) {
-      alert('이미지 스크립트를 먼저 생성해주세요.\n🖼️ 버튼 → 대본으로 이미지 스크립트 생성 후 사용 가능합니다.');
-      return;
-    }
     _imageCards = cards;
     _seqIdx = -1;
-    renderGrokModal(cards);
+    if (cards.length) {
+      renderGrokModal(cards);
+    } else {
+      renderSimpleImageModal();
+    }
+    setImageProvider(_imageProvider);
     document.getElementById('seqNavBar')?.classList.add('hidden');
     document.getElementById('grokModal').classList.remove('hidden');
+  };
+
+  function renderSimpleImageModal() {
+    document.getElementById('grokModalBody').innerHTML = `
+      <div class="flex items-center gap-2 mb-5 p-2.5 bg-slate-800/60 border border-slate-700/60 rounded-xl flex-wrap">
+        <span class="text-xs text-slate-400 flex-shrink-0">이미지 제공자:</span>
+        <button data-provider="gemini" onclick="setImageProvider('gemini')"
+          class="provider-btn text-xs px-3 py-1.5 rounded-lg border transition font-semibold bg-blue-700 border-blue-600 text-white">
+          🎨 Gemini Imagen 4
+        </button>
+        <button data-provider="pollinations" onclick="setImageProvider('pollinations')"
+          class="provider-btn text-xs px-3 py-1.5 rounded-lg border transition font-semibold bg-slate-700 border-slate-600 text-slate-300">
+          🌸 Pollinations AI
+        </button>
+        <span class="text-[10px] text-slate-500 ml-1">Pollinations: 무료 · API키 불필요 · 인물/초상화 생성 가능</span>
+      </div>
+      <div class="space-y-3">
+        <div>
+          <label class="block text-[11px] font-semibold text-blue-300 mb-1.5">🖼️ 이미지 프롬프트 (영어 권장)</label>
+          <textarea id="simple-img-prompt" rows="5"
+            class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-xs text-slate-200
+                   resize-none focus:outline-none focus:border-blue-500 font-mono leading-relaxed"
+            placeholder="beautiful Korean cityscape at sunset, cinematic, 4k, high quality, golden hour lighting..."></textarea>
+        </div>
+        <button onclick="generateSimpleImage()" id="simple-gen-btn"
+          class="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500
+                 text-white text-sm font-bold py-2.5 rounded-xl transition">
+          🎨 이미지 생성
+        </button>
+        <div id="simple-spin" class="hidden flex items-center gap-2 py-2">
+          <div class="spinner" style="width:18px;height:18px;border-width:2px;border-top-color:#3b82f6"></div>
+          <span id="simple-spin-label" class="text-xs text-blue-400">생성 중…</span>
+        </div>
+        <div id="simple-img-wrap" class="hidden">
+          <img id="simple-img-el" class="w-full rounded-xl border border-slate-600" alt="Generated" />
+          <div class="mt-2">
+            <a id="simple-dl" download="generated.png" target="_blank"
+              class="text-xs text-blue-400 hover:text-blue-300 underline font-semibold">⬇ 다운로드</a>
+          </div>
+        </div>
+        <div id="simple-err" class="hidden text-xs text-red-400 p-2 bg-red-900/20 rounded-lg"></div>
+        <p class="text-[10px] text-slate-500 text-center pt-1">💡 대본 이미지 스크립트 생성 후에는 챕터별 일괄 생성 모드로 전환됩니다</p>
+      </div>
+    `;
+  }
+
+  window.generateSimpleImage = async () => {
+    const prompt = document.getElementById('simple-img-prompt')?.value.trim();
+    if (!prompt) return;
+    const spinEl    = document.getElementById('simple-spin');
+    const spinLabel = document.getElementById('simple-spin-label');
+    const imgWrap   = document.getElementById('simple-img-wrap');
+    const imgEl     = document.getElementById('simple-img-el');
+    const dlEl      = document.getElementById('simple-dl');
+    const errEl     = document.getElementById('simple-err');
+    const btn       = document.getElementById('simple-gen-btn');
+    spinEl.classList.remove('hidden');
+    imgWrap.classList.add('hidden');
+    errEl.classList.add('hidden');
+    if (btn) { btn.disabled = true; btn.textContent = '생성 중…'; }
+    try {
+      if (_imageProvider === 'pollinations') {
+        if (spinLabel) spinLabel.textContent = 'Pollinations 생성 중…';
+        const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&nologo=true&enhance=false`;
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error(`Pollinations 오류: HTTP ${resp.status}`);
+        const blob = await resp.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        imgEl.src = blobUrl;
+        dlEl.href = blobUrl;
+        dlEl.download = 'pollinations.png';
+      } else {
+        if (spinLabel) spinLabel.textContent = 'Gemini Imagen 생성 중…';
+        const res  = await fetch('/api/proxy/gemini-image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error?.message || JSON.stringify(data).slice(0, 200));
+        const pred = data.predictions?.[0];
+        const b64  = pred?.bytesBase64Encoded;
+        if (!b64) {
+          const reason = pred?.raiFilteredReason;
+          throw new Error(reason
+            ? `Gemini 안전 필터 차단 (${reason}) — 🌸 Pollinations로 전환해 보세요.`
+            : 'Gemini Imagen이 이 프롬프트를 차단했습니다 — 🌸 Pollinations로 전환해 보세요.');
+        }
+        imgEl.src = `data:${pred.mimeType || 'image/png'};base64,${b64}`;
+        dlEl.href = imgEl.src;
+        dlEl.download = 'imagen.png';
+      }
+      imgWrap.classList.remove('hidden');
+    } catch (e) {
+      errEl.textContent = '오류: ' + e.message;
+      errEl.classList.remove('hidden');
+    } finally {
+      spinEl.classList.add('hidden');
+      if (btn) { btn.disabled = false; btn.textContent = '🎨 이미지 생성'; }
+    }
   };
 
   window.closeGrokModal = () => {
@@ -2065,12 +2433,30 @@ ${commentText}
 
   function renderGrokModal(cards) {
     document.getElementById('grokModalBody').innerHTML = `
+      <!-- 이미지 제공자 선택 -->
+      <div class="flex items-center gap-2 mb-4 p-2.5 bg-slate-800/60 border border-slate-700/60 rounded-xl flex-wrap">
+        <span class="text-xs text-slate-400 flex-shrink-0">이미지 제공자:</span>
+        <button data-provider="gemini" onclick="setImageProvider('gemini')"
+          class="provider-btn text-xs px-3 py-1.5 rounded-lg border transition font-semibold bg-blue-700 border-blue-600 text-white">
+          🎨 Gemini Imagen 4
+        </button>
+        <button data-provider="pollinations" onclick="setImageProvider('pollinations')"
+          class="provider-btn text-xs px-3 py-1.5 rounded-lg border transition font-semibold bg-slate-700 border-slate-600 text-slate-300">
+          🌸 Pollinations AI
+        </button>
+        <span class="text-[10px] text-slate-500 ml-1">Pollinations: 무료 · API키 불필요 · 인물/초상화 생성 가능</span>
+      </div>
       <div class="flex items-center justify-between mb-5 gap-3 flex-wrap">
         <p class="text-xs text-slate-400">${cards.length}개 장면 · 편집 후 순차 또는 전체 생성</p>
         <div class="flex gap-2 flex-wrap">
           <button onclick="exportAllCards()"
             class="bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-bold px-3 py-2 rounded-lg transition border border-slate-600 whitespace-nowrap">
             📥 내보내기
+          </button>
+          <button onclick="generateAllSubtitles()" id="all-sub-btn"
+            class="bg-gradient-to-r from-yellow-700 to-amber-700 hover:from-yellow-600 hover:to-amber-600
+                   text-white text-xs font-bold px-3 py-2 rounded-lg transition whitespace-nowrap">
+            ✨ 전체 자막 생성
           </button>
           <button onclick="startSeqGeneration()"
             class="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500
@@ -2182,6 +2568,13 @@ ${commentText}
                   <span id="edit-arrow-${i}" class="ml-auto text-[10px]">▴</span>
                 </button>
                 <div id="edit-panel-${i}" class="space-y-3">
+                  ${card.chapterScript ? `
+                  <div>
+                    <label class="block text-[11px] font-semibold text-slate-500 mb-1">📝 나레이션 스크립트 (참조)</label>
+                    <div class="w-full bg-slate-900/80 border border-slate-700/50 rounded-lg px-3 py-2 text-[11px] text-slate-500 leading-relaxed max-h-16 overflow-y-auto">
+                      ${escHtml(card.chapterScript)}
+                    </div>
+                  </div>` : ''}
                   <div>
                     <label class="block text-[11px] font-semibold text-slate-400 mb-1">🎥 컷 묘사</label>
                     <textarea id="img-cut-${i}" rows="2"
@@ -2199,7 +2592,18 @@ ${commentText}
                     >${escHtml(card.direction)}</textarea>
                   </div>
                   <div>
-                    <label class="block text-[11px] font-semibold text-yellow-400 mb-1">💬 자막 텍스트</label>
+                    <div class="flex items-center justify-between mb-1">
+                      <label class="text-[11px] font-semibold text-yellow-400">💬 자막 텍스트</label>
+                      <button onclick="generateSubtitleForCard(${i})" id="sub-gen-btn-${i}"
+                        class="text-[10px] font-semibold bg-yellow-800/40 hover:bg-yellow-700/60 text-yellow-300
+                               px-2 py-0.5 rounded-md border border-yellow-700/40 transition whitespace-nowrap">
+                        ✨ AI 자막 생성
+                      </button>
+                    </div>
+                    <div id="sub-gen-spin-${i}" class="hidden flex items-center gap-1.5 mb-1">
+                      <div class="spinner" style="width:12px;height:12px;border-width:2px;border-top-color:#eab308"></div>
+                      <span class="text-[10px] text-yellow-400">자막 생성 중…</span>
+                    </div>
                     <textarea id="img-sub-${i}" rows="2"
                       class="w-full bg-slate-800 border border-yellow-700/40 rounded-lg px-3 py-2 text-xs text-slate-300
                              resize-none focus:outline-none focus:border-yellow-500"
@@ -2213,11 +2617,58 @@ ${commentText}
       </div>`;
   }
 
+  window.renderGrokModal = renderGrokModal;
+
   window.toggleEditPanel = (idx) => {
     const panel = document.getElementById(`edit-panel-${idx}`);
     const arrow = document.getElementById(`edit-arrow-${idx}`);
     const nowHidden = panel.classList.toggle('hidden');
     if (arrow) arrow.textContent = nowHidden ? '▾' : '▴';
+  };
+
+  window.generateSubtitleForCard = async (idx) => {
+    const card    = _imageCards[idx];
+    const cut     = document.getElementById(`img-cut-${idx}`)?.value.trim() || card?.cutDescription || '';
+    const script  = card?.chapterScript || '';
+    const title   = card?.chapterTitle || '';
+    if (!cut && !script) { alert('컷 묘사 또는 나레이션 스크립트가 없습니다.'); return; }
+
+    const btn     = document.getElementById(`sub-gen-btn-${idx}`);
+    const spinEl  = document.getElementById(`sub-gen-spin-${idx}`);
+    const subEl   = document.getElementById(`img-sub-${idx}`);
+    if (btn)   { btn.disabled = true; btn.textContent = '생성 중…'; }
+    if (spinEl) spinEl.classList.remove('hidden');
+
+    try {
+      const context = [
+        title   ? `챕터 제목: ${title}` : '',
+        cut     ? `컷 묘사: ${cut}` : '',
+        script  ? `나레이션 스크립트: ${script}` : '',
+      ].filter(Boolean).join('\n');
+
+      const result = await geminiChat(
+        '당신은 유튜브 영상 자막 전문가입니다. 주어진 장면 정보(컷 묘사, 나레이션 스크립트)를 참고하여 화면에 표시될 자막 텍스트를 생성하세요. 나레이션 스크립트가 있으면 그 내용을 기반으로 자연스럽게 요약/정제하고, 없으면 컷 묘사에서 유추하세요. 자막 텍스트만 출력하며, 2~4줄 이내의 간결한 한국어로 작성하세요.',
+        [{ role: 'user', parts: [{ text: context }] }]
+      );
+      if (subEl) {
+        subEl.value = result.trim();
+        _imageCards[idx].subtitles = result.trim();
+      }
+    } catch(e) {
+      alert('자막 생성 실패: ' + e.message);
+    } finally {
+      if (btn)   { btn.disabled = false; btn.textContent = '✨ AI 자막 생성'; }
+      if (spinEl) spinEl.classList.add('hidden');
+    }
+  };
+
+  window.generateAllSubtitles = async () => {
+    const btn = document.getElementById('all-sub-btn');
+    if (btn) { btn.disabled = true; btn.textContent = '자막 생성 중…'; }
+    for (let i = 0; i < _imageCards.length; i++) {
+      await generateSubtitleForCard(i);
+    }
+    if (btn) { btn.disabled = false; btn.textContent = '✨ 전체 자막 생성'; }
   };
 
   window.exportAllCards = () => {
@@ -2264,8 +2715,8 @@ ${commentText}
     if (btn) { btn.disabled = true; btn.textContent = '검증 중…'; }
 
     try {
-      // ── Step 1: 프롬프트 & 장면 매칭 검증 ──
-      if (cutDesc) {
+      // ── Step 1: 프롬프트 & 장면 매칭 검증 (Gemini 키 있을 때만) ──
+      if (cutDesc && GEMINI_API_KEY) {
         if (spinLabel) spinLabel.textContent = '① 프롬프트 검증 중…';
         const valResult = await geminiChat(
           '당신은 이미지 생성 프롬프트 품질 평가 전문가입니다. 한국어 장면 묘사와 영어 AI 이미지 프롬프트의 매칭 정도를 평가하고 딱 2줄로 답변하세요: 첫 줄은 "✅ 매칭 우수" / "⚠️ 부분 매칭" / "❌ 미스매칭" 중 하나 + 점수(1-10) + 한 줄 이유, 둘째 줄은 개선 제안 (없으면 "개선 불필요").',
@@ -2284,34 +2735,46 @@ ${commentText}
       }
 
       // ── Step 2: 이미지 생성 ──
-      if (spinLabel) spinLabel.textContent = '② Gemini Imagen 생성 중…';
-      if (btn) btn.textContent = '생성 중…';
-
-      const res  = await fetch('/api/proxy/gemini-image', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error?.message || JSON.stringify(data).slice(0, 200));
-
-      const pred = data.predictions?.[0];
-      if (!pred) throw new Error('이미지 데이터 없음');
-
-      const b64  = pred.bytesBase64Encoded;
-      const mime = pred.mimeType || 'image/png';
-      if (!b64) throw new Error('이미지 데이터 없음');
-      const src = `data:${mime};base64,${b64}`;
-
-      imgEl.src = src;
-      dlEl.href = src;
+      if (_imageProvider === 'pollinations') {
+        if (spinLabel) spinLabel.textContent = '② Pollinations 생성 중…';
+        if (btn) btn.textContent = '생성 중…';
+        const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&nologo=true&enhance=false`;
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error(`Pollinations 오류: HTTP ${resp.status}`);
+        const blob = await resp.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        imgEl.src = blobUrl;
+        dlEl.href = blobUrl;
+        dlEl.download = `pollinations-${idx + 1}.png`;
+      } else {
+        if (spinLabel) spinLabel.textContent = '② Gemini Imagen 생성 중…';
+        if (btn) btn.textContent = '생성 중…';
+        const res  = await fetch('/api/proxy/gemini-image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error?.message || JSON.stringify(data).slice(0, 200));
+        const pred = data.predictions?.[0];
+        const b64  = pred?.bytesBase64Encoded;
+        if (!b64) {
+          const reason = pred?.raiFilteredReason;
+          throw new Error(reason
+            ? `Gemini 안전 필터 차단 (${reason}) — 🌸 Pollinations로 전환해 보세요.`
+            : 'Gemini Imagen이 이 프롬프트를 차단했습니다 — 🌸 Pollinations로 전환해 보세요.');
+        }
+        const src = `data:${pred.mimeType || 'image/png'};base64,${b64}`;
+        imgEl.src = src;
+        dlEl.href = src;
+      }
       imgWrap.classList.remove('hidden');
     } catch (e) {
       errEl.textContent = '오류: ' + e.message;
       errEl.classList.remove('hidden');
     } finally {
       spinEl.classList.add('hidden');
-      if (spinLabel) spinLabel.textContent = 'Gemini Imagen 생성 중…';
+      if (spinLabel) spinLabel.textContent = _imageProvider === 'pollinations' ? 'Pollinations 생성 중…' : 'Gemini Imagen 생성 중…';
       if (btn) { btn.disabled = false; btn.textContent = '🎨 이미지 생성'; }
     }
   };
@@ -2799,14 +3262,113 @@ ${commentText}
 </div>
 <button id="subtitleRenderToggle" title="자막 굽기 (Remotion)">🎞️</button>
 
+<!-- ── ComfyUI 영상 생성 위젯 ── -->
+<button id="comfyToggle" title="ComfyUI 영상 생성 (RTX GPU)">🎬</button>
+<div id="comfyWindow">
+  <!-- 헤더 -->
+  <div class="flex items-center justify-between px-4 py-3 bg-slate-800/80 border-b border-slate-700/60 flex-shrink-0">
+    <div class="flex items-center gap-2 flex-wrap">
+      <span class="text-sm font-bold text-indigo-200">🎬 ComfyUI 영상 생성</span>
+      <span id="comfyStatus" class="text-[10px] px-2 py-0.5 rounded-full bg-slate-700 text-slate-400">미연결</span>
+    </div>
+    <button id="comfyCloseBtn" class="text-slate-400 hover:text-white text-lg leading-none ml-2">✕</button>
+  </div>
+
+  <!-- 바디 -->
+  <div id="comfyBody">
+
+    <!-- ① 서버 URL -->
+    <div class="mb-4">
+      <label class="block text-[11px] font-semibold text-slate-400 mb-1.5">🌐 ComfyUI 서버 URL</label>
+      <div class="flex gap-2">
+        <input id="comfyUrlInput" type="text" placeholder="http://100.x.x.x:8188"
+          class="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500" />
+        <button onclick="testComfyConnection()"
+          class="bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-semibold px-3 py-2 rounded-lg transition border border-slate-600 whitespace-nowrap">
+          연결 테스트
+        </button>
+      </div>
+      <p class="text-[10px] text-slate-500 mt-1">Tailscale IP 또는 localhost · ComfyUI 기본 포트 8188</p>
+    </div>
+
+    <!-- ② 프롬프트 -->
+    <div class="mb-3">
+      <label class="block text-[11px] font-semibold text-green-400 mb-1.5">✅ 긍정 프롬프트</label>
+      <textarea id="comfyPositive" rows="3"
+        placeholder="a beautiful Korean cityscape at sunset, cinematic, 4k, high quality, smooth motion..."
+        class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-xs text-slate-200 resize-none focus:outline-none focus:border-green-500 font-mono leading-relaxed"></textarea>
+    </div>
+    <div class="mb-4">
+      <button onclick="document.getElementById('comfyNegPanel').classList.toggle('hidden')"
+        class="text-[11px] font-semibold text-slate-500 hover:text-slate-300 flex items-center gap-1 mb-1.5">
+        ❌ 부정 프롬프트 <span class="text-[10px]">▾</span>
+      </button>
+      <div id="comfyNegPanel" class="hidden">
+        <textarea id="comfyNegative" rows="2"
+          placeholder="blurry, low quality, watermark, text, logo, deformed..."
+          class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-xs text-slate-200 resize-none focus:outline-none focus:border-red-500 font-mono leading-relaxed"></textarea>
+      </div>
+    </div>
+
+    <!-- ③ 워크플로우 JSON -->
+    <div class="mb-4 p-3 bg-slate-900/60 border border-slate-700/60 rounded-xl">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-[11px] font-semibold text-indigo-300">📋 워크플로우 JSON</span>
+        <div class="flex gap-2">
+          <button onclick="loadComfyTemplate('animatediff')"
+            class="text-[10px] text-indigo-400 hover:text-indigo-300 underline">AnimateDiff</button>
+          <button onclick="loadComfyTemplate('wan')"
+            class="text-[10px] text-violet-400 hover:text-violet-300 underline">Wan2.1</button>
+        </div>
+      </div>
+      <textarea id="comfyWorkflow" rows="9"
+        placeholder="ComfyUI에서 워크플로우를 API 포맷으로 저장한 후 여기에 붙여넣기&#10;(Workflow → Save (API Format))&#10;&#10;또는 위의 템플릿 버튼으로 시작하기"
+        class="w-full bg-slate-800 border border-slate-600/50 rounded-lg px-3 py-2 text-[11px] text-slate-300 resize-none focus:outline-none focus:border-indigo-500 font-mono leading-relaxed"></textarea>
+      <p class="text-[10px] text-slate-500 mt-1.5">CLIPTextEncode 노드의 텍스트가 위 프롬프트로 자동 교체됩니다. 씨드는 매번 무작위 생성.</p>
+    </div>
+
+    <!-- ④ 생성 버튼 -->
+    <button id="comfyGenBtn" onclick="submitComfyGeneration()"
+      class="w-full bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500
+             text-white text-sm font-bold py-2.5 rounded-xl transition mb-4 flex items-center justify-center gap-2">
+      <span id="comfyGenLabel">▶ 영상 생성 시작</span>
+      <span id="comfyGenSpinner" class="spinner hidden" style="width:16px;height:16px;border-width:2px;border-top-color:#fff"></span>
+    </button>
+
+    <!-- 진행 상태 -->
+    <div id="comfyProgress" class="hidden mb-4 p-3 bg-slate-900/60 border border-slate-700/60 rounded-xl">
+      <div class="flex items-center gap-2 mb-2">
+        <div class="spinner" style="width:14px;height:14px;border-width:2px;border-top-color:#818cf8"></div>
+        <span id="comfyProgressText" class="text-xs text-indigo-300">생성 중...</span>
+      </div>
+      <div class="bg-slate-700 rounded-full h-1.5 overflow-hidden">
+        <div id="comfyProgressBar" class="bg-gradient-to-r from-indigo-500 to-violet-500 h-1.5 rounded-full transition-all duration-500" style="width:0%"></div>
+      </div>
+      <button onclick="cancelComfyPoll()" class="text-[10px] text-slate-500 hover:text-red-400 mt-2">✕ 취소</button>
+    </div>
+
+    <!-- 결과 -->
+    <div id="comfyResult" class="hidden p-3 bg-slate-900/60 border border-green-700/30 rounded-xl">
+      <p class="text-[11px] font-semibold text-green-400 mb-2">✅ 생성 완료</p>
+      <video id="comfyVideo" controls loop
+        class="w-full rounded-xl border border-slate-600 mb-2" style="max-height:300px;display:none"></video>
+      <img id="comfyImage" alt="Generated"
+        class="w-full rounded-xl border border-slate-600 mb-2 hidden" />
+      <a id="comfyDownload" target="_blank"
+        class="text-xs text-indigo-400 hover:text-indigo-300 underline font-semibold">⬇ 다운로드</a>
+    </div>
+
+  </div>
+</div>
+
 <!-- ── Gemini 이미지 생성 모달 ── -->
 <div id="grokModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 hidden px-4 py-6"
      onclick="if(event.target===this) closeGrokModal()">
   <div class="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col">
     <div class="flex justify-between items-center px-6 py-4 border-b border-slate-700 flex-shrink-0">
       <div>
-        <h3 class="text-base font-bold text-blue-300">🎨 Gemini Imagen 이미지 생성</h3>
-        <p class="text-xs text-slate-400 mt-0.5">프롬프트 검증 → Gemini Imagen 4 생성 · 스크립트/자막 편집 · 전체 내보내기</p>
+        <h3 class="text-base font-bold text-blue-300">🎨 이미지 생성 — Gemini Imagen 4 · Pollinations AI</h3>
+        <p class="text-xs text-slate-400 mt-0.5">제공자 선택 → 프롬프트 입력 → 이미지 생성 · 스크립트/자막 편집 · 전체 내보내기</p>
       </div>
       <button onclick="closeGrokModal()" class="text-slate-400 hover:text-white text-xl leading-none ml-4">✕</button>
     </div>
