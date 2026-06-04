@@ -22,6 +22,7 @@ def load_env():
         'XAI_API_KEY': '',
         'COMFYUI_URL': 'http://100.78.58.105:8004',
         'COMFY_API_KEY': '',
+        'POLLINATIONS_TOKEN': '',
     }
     if ENV_FILE.exists():
         for line in ENV_FILE.read_text(encoding='utf-8').splitlines():
@@ -40,6 +41,7 @@ def save_env(data):
         f"XAI_API_KEY={data.get('XAI_API_KEY', '')}\n"
         f"COMFYUI_URL={data.get('COMFYUI_URL', 'http://100.78.58.105:8004')}\n"
         f"COMFY_API_KEY={data.get('COMFY_API_KEY', '')}\n"
+        f"POLLINATIONS_TOKEN={data.get('POLLINATIONS_TOKEN', '')}\n"
     )
     ENV_FILE.write_text(content, encoding='utf-8')
 
@@ -378,8 +380,10 @@ class Handler(SimpleHTTPRequestHandler):
             seed   = data.get('seed', '')
             if not prompt:
                 _send_json(self, 400, {'error': 'prompt required'}); return
+            token = load_env().get('POLLINATIONS_TOKEN', '')
             qs_parts = [f'width={width}', f'height={height}', f'model={model}']
-            if seed: qs_parts.append(f'seed={seed}')
+            if seed:  qs_parts.append(f'seed={seed}')
+            if token: qs_parts.append(f'token={urllib.parse.quote(token)}')
             url = f'https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}?{"&".join(qs_parts)}'
             last_err = None
             for attempt in range(4):          # 큐 풀(402) 시 최대 4회 재시도

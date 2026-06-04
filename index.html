@@ -476,9 +476,23 @@
           </div>
         </div>
       </div>
-      <!-- Gemini 이미지 생성 안내 -->
+      <!-- Pollinations 토큰 -->
       <div class="border-t border-slate-600/50 pt-4 mt-1 mb-4">
-        <p class="text-xs text-blue-400">🎨 이미지 생성: <strong>Gemini Imagen 4</strong> (Gemini API 키 필요) 또는 <strong>🌸 Pollinations AI</strong> (무료 · API 키 불필요)</p>
+        <div class="flex items-center gap-2 mb-2">
+          <span class="text-xs font-semibold text-pink-400">🌸 Pollinations AI 토큰 (선택)</span>
+          <a href="https://enter.pollinations.ai" target="_blank" class="text-[11px] text-slate-500 underline">무료 토큰 발급</a>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <div class="flex items-center justify-between mb-1">
+              <label class="text-xs text-slate-400">Pollinations 토큰</label>
+              <span id="pollinationsTokenSaved" class="text-[11px] text-green-400 hidden">✓ 저장됨</span>
+            </div>
+            <input id="pollinationsTokenInput" type="password" placeholder="토큰 입력…"
+              class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-pink-500" />
+            <p class="text-xs text-slate-500 mt-1">토큰 없이도 사용 가능 · 네트워크 제한 시 토큰 필요 (<a href="https://enter.pollinations.ai" target="_blank" class="underline text-pink-400">enter.pollinations.ai</a>에서 무료 발급)</p>
+          </div>
+        </div>
       </div>
       <span id="keySaved" class="text-green-400 text-sm hidden">✓ 저장 완료</span>
     </div>
@@ -575,9 +589,10 @@
   let YOUTUBE_API_KEY    = '';
   let GEMINI_API_KEY     = '';
   let GEMINI_MODEL       = 'gemini-2.5-flash';
-  let TRANSCRIPT_API_KEY = '';
-  let XAI_API_KEY        = '';
-  let COMFYUI_URL        = 'http://100.78.58.105:42004';
+  let TRANSCRIPT_API_KEY  = '';
+  let XAI_API_KEY         = '';
+  let COMFYUI_URL         = 'http://100.78.58.105:42004';
+  let POLLINATIONS_TOKEN  = '';
   let _cachedAnalysis = null;   // 분석 결과 캐시
   let _cachedVideoTitle = '';
 
@@ -617,13 +632,15 @@
       if (cfg.YOUTUBE_API_KEY)    document.getElementById('ytKeyInput').value = cfg.YOUTUBE_API_KEY;
       if (cfg.GEMINI_API_KEY)     document.getElementById('geminiKeyInput').value = cfg.GEMINI_API_KEY;
       if (cfg.GEMINI_MODEL)       document.getElementById('geminiModelInput').value = cfg.GEMINI_MODEL;
-      if (cfg.TRANSCRIPT_API_KEY) document.getElementById('transcriptKeyInput').value = cfg.TRANSCRIPT_API_KEY;
-      if (cfg.XAI_API_KEY)        document.getElementById('xaiKeyInput').value        = cfg.XAI_API_KEY;
+      if (cfg.TRANSCRIPT_API_KEY)  document.getElementById('transcriptKeyInput').value    = cfg.TRANSCRIPT_API_KEY;
+      if (cfg.XAI_API_KEY)         document.getElementById('xaiKeyInput').value            = cfg.XAI_API_KEY;
+      if (cfg.POLLINATIONS_TOKEN)  document.getElementById('pollinationsTokenInput').value = cfg.POLLINATIONS_TOKEN;
       YOUTUBE_API_KEY    = cfg.YOUTUBE_API_KEY    || '';
       GEMINI_API_KEY     = cfg.GEMINI_API_KEY     || '';
       GEMINI_MODEL       = cfg.GEMINI_MODEL       || 'gemini-2.5-flash';
       TRANSCRIPT_API_KEY = cfg.TRANSCRIPT_API_KEY || '';
       XAI_API_KEY        = cfg.XAI_API_KEY        || '';
+      POLLINATIONS_TOKEN = cfg.POLLINATIONS_TOKEN  || '';
       COMFYUI_URL        = cfg.COMFYUI_URL        || 'http://100.78.58.105:42004';
       const comfyInput = document.getElementById('comfyUrlInput');
       if (comfyInput && COMFYUI_URL) comfyInput.value = COMFYUI_URL;
@@ -642,11 +659,12 @@
     GEMINI_MODEL       = document.getElementById('geminiModelInput').value.trim() || 'gemini-2.5-flash';
     TRANSCRIPT_API_KEY = document.getElementById('transcriptKeyInput').value.trim();
     XAI_API_KEY        = (document.getElementById('xaiKeyInput') || {}).value?.trim() || XAI_API_KEY;
+    POLLINATIONS_TOKEN = (document.getElementById('pollinationsTokenInput') || {}).value?.trim() || POLLINATIONS_TOKEN;
     try {
       await fetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ YOUTUBE_API_KEY, GEMINI_API_KEY, GEMINI_MODEL, TRANSCRIPT_API_KEY, XAI_API_KEY, COMFYUI_URL })
+        body: JSON.stringify({ YOUTUBE_API_KEY, GEMINI_API_KEY, GEMINI_MODEL, TRANSCRIPT_API_KEY, XAI_API_KEY, COMFYUI_URL, POLLINATIONS_TOKEN })
       });
     } catch (_) { /* 서버 없을 때 무시 */ }
   }
@@ -663,7 +681,8 @@
     ['ytKeyInput',         'ytKeySaved'],
     ['geminiKeyInput',     'geminiKeySaved'],
     ['geminiModelInput',   'modelSaved'],
-    ['transcriptKeyInput', 'transcriptKeySaved'],
+    ['transcriptKeyInput',     'transcriptKeySaved'],
+    ['pollinationsTokenInput', 'pollinationsTokenSaved'],
   ].forEach(([inputId, badgeId]) => {
     const el = document.getElementById(inputId);
     if (!el) return;
