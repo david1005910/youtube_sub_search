@@ -371,7 +371,7 @@ class Handler(SimpleHTTPRequestHandler):
                 _send_json(self, 500, {'error': str(e)})
 
         elif self.path == '/api/proxy/pollinations':
-            import base64, time as _time
+            import base64
             data   = json.loads(body_raw)
             prompt = data.get('prompt', '')
             width  = int(data.get('width',  1024))
@@ -381,38 +381,37 @@ class Handler(SimpleHTTPRequestHandler):
             if not prompt:
                 _send_json(self, 400, {'error': 'prompt required'}); return
             token = load_env().get('POLLINATIONS_TOKEN', '')
-            qs_parts = [f'width={width}', f'height={height}', f'model={model}']
-            if seed:  qs_parts.append(f'seed={seed}')
-            if token: qs_parts.append(f'token={urllib.parse.quote(token)}')
-            url = f'https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}?{"&".join(qs_parts)}'
+            if not token:
+                _send_json(self, 401, {'error': 'Pollinations API 키가 필요합니다. 설정 패널에서 enter.pollinations.ai에서 발급받은 키를 입력하세요.'}); return
+            # gen.pollinations.ai — 신규 API (Authorization Bearer 방식)
+            qs_parts = [f'model={model}', f'width={width}', f'height={height}']
+            if seed: qs_parts.append(f'seed={seed}')
+            url = f'https://gen.pollinations.ai/image/{urllib.parse.quote(prompt)}?{"&".join(qs_parts)}'
+            hdrs = {
+                'User-Agent': 'YouTubeContentTool/1.0',
+                'Accept': 'image/*,*/*',
+            }
+            if token:
+                hdrs['Authorization'] = f'Bearer {token}'
+            req = urllib.request.Request(url, headers=hdrs)
             last_err = None
-            for attempt in range(4):          # 큐 풀(402) 시 최대 4회 재시도
-                if attempt > 0:
-                    _time.sleep(5 * attempt)  # 5s, 10s, 15s
-                req = urllib.request.Request(url, headers={
-                    'User-Agent': 'Mozilla/5.0 (compatible; YouTubeContentTool/1.0)',
-                    'Accept': 'image/*,*/*',
-                })
+            try:
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    img_bytes = resp.read()
+                    ct = resp.headers.get('Content-Type', 'image/jpeg')
+                b64 = base64.b64encode(img_bytes).decode()
+                _send_json(self, 200, {'b64': b64, 'mimeType': ct})
+                last_err = None
+            except urllib.error.HTTPError as e:
+                err_body = e.read() or b'{}'
                 try:
-                    with urllib.request.urlopen(req, timeout=90) as resp:
-                        img_bytes = resp.read()
-                        ct = resp.headers.get('Content-Type', 'image/jpeg')
-                    b64 = base64.b64encode(img_bytes).decode()
-                    _send_json(self, 200, {'b64': b64, 'mimeType': ct})
-                    last_err = None
-                    break
-                except urllib.error.HTTPError as e:
-                    err_body = e.read() or b'{}'
-                    try:
-                        msg = json.loads(err_body).get('error', f'HTTP {e.code}')
-                    except Exception:
-                        msg = f'HTTP {e.code}'
-                    last_err = (e.code, msg)
-                    if e.code not in (402, 429):  # 큐풀/과부하가 아니면 즉시 실패
-                        break
-                except Exception as e:
-                    last_err = (500, str(e))
-                    break
+                    msg = json.loads(err_body).get('error', {})
+                    if isinstance(msg, dict): msg = msg.get('message', f'HTTP {e.code}')
+                except Exception:
+                    msg = f'HTTP {e.code}'
+                last_err = (e.code, str(msg))
+            except Exception as e:
+                last_err = (500, str(e))
             if last_err:
                 code, msg = last_err
                 _send_json(self, code, {'error': f'Pollinations: {msg}'})
